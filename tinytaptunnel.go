@@ -1,5 +1,5 @@
 /*
- * Tiny Tap Tunnel - vsergeev@gmail.com
+ * Tiny Tap Tunnel - <vsergeev> vsergeev@gmail.com
  * UDP/IP Encrypted Point-to-Point Tunnel
  */
 
@@ -47,7 +47,9 @@ const (
 	DEBUG = 1
 )
 
-/******************** RSA PEM Key File Wrappers ********************/
+/**********************************************************************/
+/*** RSA PEM Key File ***/
+/**********************************************************************/
 
 func read_pem(filename string) ([]byte, error) {
 	/* Read the ASCII-encoded PEM file */
@@ -105,7 +107,9 @@ func read_rsa_prikey(filename string) (rsa_prikey *rsa.PrivateKey, err error) {
 	return rsa_prikey, nil
 }
 
-/******************** Plaintext Frame Encapsulation (CRC) ********************/
+/**********************************************************************/
+/*** Plaintext Frame Encapsulation ***/
+/**********************************************************************/
 
 func encap_frame(frame []byte) (enc_frame []byte) {
 	/* Calculate the CRC32 of the frame */
@@ -130,7 +134,9 @@ func decap_frame(total_frame []byte) (frame []byte, inv error) {
 	return total_frame[CHK_SIZE:], nil
 }
 
-/******************** Encrypted Frame Encapsulation ********************/
+/**********************************************************************/
+/*** Encrypted Frame Encapsulation ***/
+/**********************************************************************/
 
 /* Encrypted Frame Format is:
  * | CRC-32 (4 bytes) | RSA OAEP Encrypted Key and IV (256 bytes) |
@@ -223,7 +229,9 @@ func decrypt_frame(total_frame []byte, rsa_prikey *rsa.PrivateKey) (frame []byte
 	return frame, nil, nil
 }
 
-/******************** Tap Device ********************/
+/**********************************************************************/
+/*** Tap Device Open/Close/Read/Write ***/
+/**********************************************************************/
 
 type TapConn struct {
 	fd     int
@@ -320,7 +328,9 @@ func (tap_conn *TapConn) Write(b []byte) (n int, err error) {
 	return syscall.Write(tap_conn.fd, b)
 }
 
-/******************** Tap / Physical Forwarding ********************/
+/**********************************************************************/
+/** Tap / Physical Forwarding ***/
+/**********************************************************************/
 
 func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, local_prikey *rsa.PrivateKey) {
 	packet := make([]byte, UDP_MTU)
@@ -343,7 +353,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 			dec_frame, inv, err = decrypt_frame(packet[0:n], local_prikey)
 			check_error_fatal(err, "Error decrypting frame!: %s\n")
 
-			/* Plaintext mode */
+		/* Plaintext mode */
 		} else {
 			/* Decapsulate the frame */
 			dec_frame, inv = decap_frame(packet[0:n])
@@ -388,6 +398,8 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 			/* Encrypt the frame */
 			enc_frame, err = encrypt_frame(frame[0:n], peer_pubkey)
 			check_error_fatal(err, "Error encrypting frame!: %s\n")
+
+		/* Plaintext mode */
 		} else {
 			/* Encapsulate the frame */
 			enc_frame = encap_frame(frame[0:n])
@@ -425,6 +437,7 @@ func main() {
 	}
 
 	if len(os.Args) == 5 {
+		/* Encrypted mode */
 		var err error
 
 		/* Load key files for encrypted mode */
@@ -435,7 +448,9 @@ func main() {
 		check_error_fatal(err, "Error reading peer RSA public key!: %s")
 
 		tap_mtu = TAP_ENCRYPTED_MTU
+
 	} else {
+		/* Plaintext mode */
 		tap_mtu = TAP_PLAINTEXT_MTU
 	}
 
