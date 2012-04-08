@@ -416,7 +416,7 @@ func main() {
 	var peer_pubkey *rsa.PublicKey = nil
 	var tap_mtu uint
 
-	if len(os.Args) != 2 && len(os.Args) != 4 {
+	if len(os.Args) != 3 && len(os.Args) != 5 {
 		fmt.Println("Plaintext Mode: ")
 		fmt.Printf("%s <local address> <peer address>\n", os.Args[0])
 		fmt.Println("\nEncrypted Mode: ")
