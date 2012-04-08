@@ -1,8 +1,8 @@
 tinytaptunnel
 =============
 
-About tinytaptunnel
--------------------
+About
+-----
 
 tinytaptunnel provides a point-to-point layer 2 tunnel over UDP/IP, accessible
 via the generic tap interface at both peers. Any frames written at one peer's
@@ -28,15 +28,15 @@ with standard ethernet bridge tools like brctl, or layer 3 routing with
 standard NAT tools like iptables. Convenient scripts to create these bridges or
 NAT are included in the scripts/ folder.
 
-Building tinytaptunnel
-----------------------
+Building
+--------
 
 	$ go build
 
 will build the tinytaptunnel binary with the gc go compiler.
 
-Running tinytaptunnel
----------------------
+Running
+-------
 
 Program Usage:
 
