@@ -165,6 +165,6 @@ Closing Remarks
 tinytaptunnel is MIT licensed.
 
 Feel free to report any issues, bug reports, or suggestions at
-(github)[https://github.com/vsergeev/tinytaptunnel/issues] or by email at
+[github](https://github.com/vsergeev/tinytaptunnel/issues) or by email at
 vsergeev at gmail.
 
