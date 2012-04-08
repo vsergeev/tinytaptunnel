@@ -162,7 +162,7 @@ fragmentation.
 Closing Remarks
 ---------------
 
-tinytaptunnel is MIT licensed.
+tinytaptunnel is MIT licensed. See the provided LICENSE file.
 
 Feel free to report any issues, bug reports, or suggestions at
 [github](https://github.com/vsergeev/tinytaptunnel/issues) or by email at
