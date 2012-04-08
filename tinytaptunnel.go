@@ -456,8 +456,8 @@ func main() {
 	err = tap_conn.Open(tap_mtu)
 	check_error_fatal(err, "Error opening a tap device!: %s\n")
 
-	fmt.Printf("Created tunnel at interface %s with MTU %d\n\n", tap_conn.ifname)
-	fmt.Println("Starting tinytaptunnel...\n")
+	fmt.Printf("Created tunnel at interface %s with MTU %d\n\n", tap_conn.ifname, tap_mtu)
+	fmt.Println("Starting tinytaptunnel...")
 
 	/* Start two goroutines for forwarding between interfaces */
 	go forward_phys_to_tap(phys_conn, tap_conn, peer_addr, local_prikey)
