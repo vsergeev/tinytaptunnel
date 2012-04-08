@@ -1,6 +1,8 @@
 /*
- * Tiny Tap Tunnel - <vsergeev> vsergeev@gmail.com
- * UDP/IP Encrypted Point-to-Point Tunnel
+ * tinytaptunnel v1.0 - Vanya A. Sergeev - vsergeev at gmail
+ *
+ * Point-to-Point Layer 2 tap interface tunnel over UDP/IP, with optional
+ * encryption. See README.md for more information.
  */
 
 package main
@@ -434,10 +436,11 @@ func main() {
 	var encrypted bool = false
 
 	if len(os.Args) != 3 && len(os.Args) != 5 {
-		fmt.Println("Plaintext Mode: ")
-		fmt.Printf("%s <local address> <peer address>\n", os.Args[0])
-		fmt.Println("\nEncrypted Mode: ")
-		fmt.Printf("%s <local address> <peer address> <local prikey> <peer pubkey>\n", os.Args[0])
+		fmt.Println("tinytaptunnel v1.0 Usage\n")
+		fmt.Println("Plaintext Mode")
+		fmt.Printf("  %s <local address> <peer address>\n", os.Args[0])
+		fmt.Println("\nEncrypted Mode")
+		fmt.Printf("  %s <local address> <peer address> <local prikey> <peer pubkey>\n", os.Args[0])
 		os.Exit(1)
 	}
 
