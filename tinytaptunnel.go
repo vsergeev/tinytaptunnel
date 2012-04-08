@@ -37,9 +37,9 @@ const (
 	/* UDP Payload MTU */
 	UDP_MTU = 1472
 	/* Tap Encrypted Payload MTU */
-	TAP_ENCRYPTED_MTU = UDP_MTU - OAEP_SIZE - CHK_SIZE
+	TAP_ENCRYPTED_MTU = UDP_MTU - OAEP_SIZE - CHK_SIZE - 14
 	/* Tap Plaintext Payload MTU */
-	TAP_PLAINTEXT_MTU = UDP_MTU - CHK_SIZE
+	TAP_PLAINTEXT_MTU = UDP_MTU - CHK_SIZE - 14
 
 	/* Debug levels 0 (off), 1 (discarded frames), 2 (verbose) */
 	DEBUG = 1
@@ -331,7 +331,7 @@ func (tap_conn *TapConn) Write(b []byte) (n int, err error) {
 /**********************************************************************/
 
 func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, local_prikey *rsa.PrivateKey) {
-	packet := make([]byte, 1500)
+	packet := make([]byte, UDP_MTU)
 	var dec_frame []byte
 	var inv error = nil
 
