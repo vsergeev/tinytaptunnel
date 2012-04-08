@@ -95,7 +95,7 @@ Using tinytaptunnel for a Layer 2 Bridge
 ----------------------------------------
 
 Bridging the provided tap interface with a physical interface at one peer will
-give the other peer layer 2 access to the briding peer's local network.  The
+give the other peer layer 2 access to the bridging peer's local network.  The
 other peer can essentially act as another host on the bridging peer's local
 layer 2 network.
 
@@ -108,8 +108,8 @@ Peer 1
 	$ sudo brctl addif vpnbridge tap0
 	$ sudo brctl addif vpnbridge eth0
 	$ sudo ifconfig vpnbridge up
-	(all of these bridge commands are also contained in
-	 scripts/l2_bridge_up.sh for convenience)
+	  (these bridge commands are also contained in scripts/l2_bridge_up.sh
+	   for convenience)
 
 Peer 2
 
@@ -123,13 +123,14 @@ Using tinytaptunnel for a Layer 3 NAT
 --------------------------------------
 
 Configuring one peer to act as a NAT router for the point-to-point static IP
-connection with the other peer enables the other peer to make IP connections
-with hosts in the routing peer's private local network.
+connection with the other peer enables the other to make IP connections with
+hosts in the routing peer's local private network.
 
 ##### Example Configuration for Peer 1 Sharing their Local Network (Layer 3)
 
 In this example, peer 1 is on the 192.168.1.0/24 subnet, and both peers have a
-static IP address on the 10.0.0.0/8 subnet.
+point-to-point connection via tinytaptunnel with static IP addresses on the
+10.0.0.0/8 subnet.
 
 Peer 1
 
@@ -137,8 +138,8 @@ Peer 1
 	$ sudo ifconfig tap0 10.1.2.3
 	$ sudo iptables -t nat -A POSTROUTING -j MASQUERADE -o eth0
 	$ sudo iptables -A FORWARD -i tap0 -o eth0 -j ACCEPT
-	(all of these iptables commands are also contained in
-	 scripts/l3_route_up.sh for convenience)
+	  (these iptables commands are also contained in scripts/l3_route_up.sh
+	   for convenience)
 
 Peer 2
 
@@ -146,7 +147,7 @@ Peer 2
 	$ sudo ifconfig tap0 10.1.2.4
 	$ sudo route add 192.168.1.0/24 via 10.1.2.3 dev tap0
 
-Now peer 2 should be able to connect to hosts in peer 1's 192.168.1.1/24 subnet
+Now peer 2 should be able to connect to hosts in peer 1's 192.168.1.0/24 subnet
 via the route through peer 1 at 10.1.2.3.
 
 Limitations of tinytaptunnel
@@ -155,8 +156,8 @@ Limitations of tinytaptunnel
 In encrypted mode, tinytaptunnel can impose significant delays due to the
 per-frame encryption / decryption. Delays of 4x compared to plaintext mode have
 been observed. Also, due to the size overhead of the RSA encrypted AES key and
-IV, the virtual tap interface provided by tinytaptunnel will have a limited MTU
-(around 1200).  This can lead to additional performance loss due to packet
+IV, the tap interface provided by tinytaptunnel will have a limited MTU of
+around 1200 on IPv4. This can lead to additional performance loss due to packet
 fragmentation.
 
 Closing Remarks
