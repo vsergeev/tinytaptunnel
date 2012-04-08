@@ -43,7 +43,7 @@ const (
 	/* Tap Plaintext Payload MTU */
 	TAP_PLAINTEXT_MTU = UDP_MTU - CHK_SIZE - 14
 
-	/* Debug levels 0 (off), 1 (discarded frames), 2 (verbose) */
+	/* Debug levels 0 (off), 1 (report discarded frames), 2 (verbose) */
 	DEBUG = 1
 )
 
@@ -116,7 +116,7 @@ func read_rsa_prikey(filename string) (rsa_prikey *rsa.PrivateKey, err error) {
  */
 
 func encap_frame(frame []byte) (enc_frame []byte) {
-	/* Calculate the CRC32 of the frame */
+	/* Compute the CRC32 of the frame */
 	crc_uint32 := crc32.ChecksumIEEE(frame)
 	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
 
@@ -188,7 +188,7 @@ func encrypt_frame(frame []byte, rsa_pubkey *rsa.PublicKey) (total_frame []byte,
 	/* Combine the encrypted key / IV and the encrypted frame into one slice */
 	total_frame = append(enc_key_iv[:], enc_frame[:]...)
 
-	/* Calculate the CRC32 of the frame */
+	/* Compute the CRC32 of the frame */
 	crc_uint32 := crc32.ChecksumIEEE(total_frame)
 	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
 
@@ -305,6 +305,7 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	/* Update the interface flags to bring the interface up */
 	ifr_flags = uint32(ifr_struct[16]) | uint32(ifr_struct[17]<<8) | uint32(ifr_struct[18]<<16) | uint32(ifr_struct[19]<<24)
 	ifr_flags |= syscall.IFF_UP | syscall.IFF_RUNNING
+	/* FIXME: Assumes little endian */
 	ifr_struct[16] = byte(ifr_flags)
 	ifr_struct[17] = byte(ifr_flags >> 8)
 	ifr_struct[18] = byte(ifr_flags >> 16)
@@ -344,7 +345,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 	var inv error = nil
 
 	for {
-		/* Read an encrypted frame packet */
+		/* Read an encrypted/encapsulated frame packet from UDP */
 		n, _, err := phys_conn.ReadFromUDP(packet)
 		check_error_fatal(err, "Error reading from UDP socket!: %s\n")
 
@@ -379,7 +380,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 			fmt.Println(hex.Dump(dec_frame))
 		}
 
-		/* Forward it to our tap interface */
+		/* Forward the decrypted/decapsulate frame to our tap interface */
 		_, err = tap_conn.Write(dec_frame)
 		check_error_fatal(err, "Error writing to tap device!: %s\n")
 	}
@@ -416,7 +417,8 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 			fmt.Println(hex.Dump(enc_frame))
 		}
 
-		/* Forward it to our physical interface */
+		/* Forward the encrypted/encapsulate frame to our physical
+ 		 * interface */
 		_, err = phys_conn.WriteToUDP(enc_frame, peer_addr)
 		check_error_fatal(err, "Error writing to UDP socket!: %s\n")
 	}
@@ -451,7 +453,6 @@ func main() {
 		/* Load key files for encrypted mode */
 		local_prikey, err = read_rsa_prikey(os.Args[3])
 		check_error_fatal(err, "Error reading private RSA private key!: %s")
-
 		peer_pubkey, err = read_rsa_pubkey(os.Args[4])
 		check_error_fatal(err, "Error reading peer RSA public key!: %s")
 
