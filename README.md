@@ -24,16 +24,16 @@ and private key files. Sample public and private keys for experimentation are
 included in the keys/ folder.
 
 Since tinytaptunnel operates at layer 2, it can be used for layer 2 bridging
-with standard ethernet bridge tools like brctl, or layer 3 routing with
-standard NAT tools like iptables. Convenient scripts to create these bridges or
-NAT are included in the scripts/ folder.
+with standard ethernet bridge tools like brctl, or layer 3 routing / NAT with
+standard routing tools like iptables. Convenient scripts to create these
+bridges or NAT are included in the scripts/ folder.
 
 Building
 --------
 
 	$ go build
 
-will build the tinytaptunnel binary with the gc go compiler.
+will build the tinytaptunnel binary with the gc Go compiler.
 
 Running
 -------
