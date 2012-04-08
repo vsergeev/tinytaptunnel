@@ -41,8 +41,6 @@ const (
 	/* Tap Plaintext Payload MTU */
 	TAP_PLAINTEXT_MTU = UDP_MTU - CHK_SIZE
 
-	UDP_PORT = 9123
-
 	/* Debug levels 0 (off), 1 (discarded frames), 2 (verbose) */
 	DEBUG = 1
 )
