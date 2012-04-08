@@ -346,8 +346,13 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 
 	for {
 		/* Read an encrypted/encapsulated frame packet from UDP */
-		n, _, err := phys_conn.ReadFromUDP(packet)
+		n, raddr, err := phys_conn.ReadFromUDP(packet)
 		check_error_fatal(err, "Error reading from UDP socket!: %s\n")
+
+		/* Ensure it's addressed from our peer */
+		if !raddr.IP.Equal(peer_addr.IP) {
+			continue
+		}
 
 		if DEBUG == 2 {
 			fmt.Println("<- phys | Encrypted frame:")
