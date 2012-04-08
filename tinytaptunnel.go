@@ -424,7 +424,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(os.Args) == 4 {
+	if len(os.Args) == 5 {
 		var err error
 
 		/* Load key files for encrypted mode */
