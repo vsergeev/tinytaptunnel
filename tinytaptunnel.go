@@ -37,7 +37,7 @@ const (
 	/* UDP Payload MTU */
 	UDP_MTU = 1472
 	/* Tap Encrypted Payload MTU */
-	TAP_ENCRYPTED_MTU = UDP_MTU - OAEP_SIZ - CHK_SIZE
+	TAP_ENCRYPTED_MTU = UDP_MTU - OAEP_SIZE - CHK_SIZE
 	/* Tap Plaintext Payload MTU */
 	TAP_PLAINTEXT_MTU = UDP_MTU - CHK_SIZE
 
