@@ -37,7 +37,7 @@ const (
 	/* UDP Payload MTU */
 	UDP_MTU = 1472
 	/* Tap Encrypted Payload MTU */
-	TAP_ENCRYPTED_MTU = UDP_MTU - OAEP_SIZE
+	TAP_ENCRYPTED_MTU = UDP_MTU - OAEP_SIZ - CHK_SIZE
 	/* Tap Plaintext Payload MTU */
 	TAP_PLAINTEXT_MTU = UDP_MTU - CHK_SIZE
 
@@ -331,7 +331,7 @@ func (tap_conn *TapConn) Write(b []byte) (n int, err error) {
 /**********************************************************************/
 
 func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, local_prikey *rsa.PrivateKey) {
-	packet := make([]byte, UDP_MTU)
+	packet := make([]byte, 1500)
 	var dec_frame []byte
 	var inv error = nil
 
@@ -360,7 +360,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 		/* Skip it if it's invalid */
 		if inv != nil {
 			if DEBUG >= 1 {
-				fmt.Printf("<- phys | Frame discarded! Reason: %s\n", err.Error())
+				fmt.Printf("<- phys | Frame discarded! Size: %d, Reason: %s\n", n, inv.Error())
 				fmt.Println(hex.Dump(packet[0:n]))
 			}
 			continue
@@ -425,6 +425,7 @@ func main() {
 	var local_prikey *rsa.PrivateKey = nil
 	var peer_pubkey *rsa.PublicKey = nil
 	var tap_mtu uint
+	var encrypted bool = false
 
 	if len(os.Args) != 3 && len(os.Args) != 5 {
 		fmt.Println("Plaintext Mode: ")
@@ -445,8 +446,8 @@ func main() {
 		peer_pubkey, err = read_rsa_pubkey(os.Args[4])
 		check_error_fatal(err, "Error reading peer RSA public key!: %s")
 
+		encrypted = true
 		tap_mtu = TAP_ENCRYPTED_MTU
-
 	} else {
 		/* Plaintext mode */
 		tap_mtu = TAP_PLAINTEXT_MTU
@@ -470,7 +471,11 @@ func main() {
 	check_error_fatal(err, "Error opening a tap device!: %s\n")
 
 	fmt.Printf("Created tunnel at interface %s with MTU %d\n\n", tap_conn.ifname, tap_mtu)
-	fmt.Println("Starting tinytaptunnel...")
+	if encrypted {
+		fmt.Println("Starting encrypted tinytaptunnel...")
+	} else {
+		fmt.Println("Starting plaintext tinytaptunnel...")
+	}
 
 	/* Start two goroutines for forwarding between interfaces */
 	go forward_phys_to_tap(phys_conn, tap_conn, peer_addr, local_prikey)
