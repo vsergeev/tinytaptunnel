@@ -109,10 +109,16 @@ func read_rsa_prikey(filename string) (rsa_prikey *rsa.PrivateKey, err error) {
 /*** Plaintext Frame Encapsulation ***/
 /**********************************************************************/
 
+/* Plaintext Frame Format is:
+ * | CRC-32 (4 bytes) | Original Frame (original frame len) |
+ */
+
 func encap_frame(frame []byte) (enc_frame []byte) {
 	/* Calculate the CRC32 of the frame */
 	crc_uint32 := crc32.ChecksumIEEE(frame)
 	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
+
+	/* Prepend CRC to original frame */
 	return append(crc_bytes[:], frame[:]...)
 }
 
