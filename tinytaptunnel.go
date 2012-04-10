@@ -31,6 +31,8 @@ const (
 	/* Key and IV size for 256-bit AES */
 	KEY_SIZE = 32
 	IV_SIZE  = 16
+	/* SHA1 Hash Size */
+	HASH_SIZE = 20
 	/* CRC-32 Size */
 	CHK_SIZE = 4
 	/* RSA OAEP Encrypted Size */
@@ -121,116 +123,127 @@ func encap_frame(frame []byte) (enc_frame []byte) {
 	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
 
 	/* Prepend CRC to original frame */
-	return append(crc_bytes[:], frame[:]...)
+	return append(crc_bytes, frame...)
 }
 
-func decap_frame(total_frame []byte) (frame []byte, inv error) {
+func decap_frame(total_enc_frame []byte) (frame []byte, inv error) {
 	/* Check that the encapsulated frame size is valid */
-	if len(total_frame) < CHK_SIZE {
+	if len(total_enc_frame) < CHK_SIZE {
 		return nil, errors.New("Invalid encapsulated frame size!")
 	}
 
 	/* Verify the checksum */
-	crc_uint32 := crc32.ChecksumIEEE(total_frame[CHK_SIZE:])
+	crc_uint32 := crc32.ChecksumIEEE(total_enc_frame[CHK_SIZE:])
 	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
-	if bytes.Compare(crc_bytes, total_frame[0:CHK_SIZE]) != 0 {
-		return nil, errors.New("Invalid checksum!")
+	if bytes.Compare(crc_bytes, total_enc_frame[0:CHK_SIZE]) != 0 {
+		return nil, errors.New("Invalid checksum")
 	}
 
-	return total_frame[CHK_SIZE:], nil
+	return total_enc_frame[CHK_SIZE:], nil
 }
 
 /**********************************************************************/
 /*** Encrypted Frame Encapsulation ***/
 /**********************************************************************/
 
-/* Encrypted Frame Format is:
- * | CRC-32 (4 bytes) | RSA OAEP Encrypted Key and IV (256 bytes) |
- * | AES Encrypted Payload (original frame len)                   |
+/* Total Encrypted Frame Format is:
+ * | CRC-32 (4 bytes) | RSA OAEP Encrypted Key, IV, Payload Hash (256 bytes) |
+ * | AES-256 CTR Encrypted Payload (original frame len)                      |
  *
- * Plaintext Key and IV are:
- * | Key (32 bytes) | IV (16 bytes) |
+ * Plaintext Key, IV, and Hash are:
+ * | Key (32 bytes) | IV (16 bytes) | Payload SHA1 Hash (20 bytes) |
  *
- * - 256-bit key and 128-bit IV are randomly generated
- * - Plaintext from tap is encrypted with AES in CTR mode using this key and IV
- * - Key and IV are encrypted with RSA OAEP
- * - CRC-32 of the Encrypted Key/IV and Encrypted Frame is calculated
- * - Total encrypted frame is assembled as laid out above
+ * 1. 256-bit key and 128-bit IV are pseudo-randomly generated
+ * 2. Payload SHA1 Hash is computed
+ * 3. Key, IV, Payload SHA1 Hash are encrypted / encapsulated with RSA-OAEP
+ * 4. Plaintext is encrypted with AES in CTR mode using key and IV
+ * 5. CRC-32 of the Encrypted Key/IV/Hash and Encrypted Frame is calculated
+ * 6. Total encrypted frame is assembled as laid out above
  */
 
-func encrypt_frame(frame []byte, rsa_pubkey *rsa.PublicKey) (total_frame []byte, err error) {
-	/* Byte slice for the 256-bit key and 128-bit IV */
-	key_iv := make([]byte, KEY_SIZE+IV_SIZE)
+func encrypt_frame(frame []byte, rsa_pubkey *rsa.PublicKey) (total_enc_frame []byte, err error) {
+	/* Byte slice for the 256-bit key, 128-bit IV */
+	key_iv_hash := make([]byte, KEY_SIZE+IV_SIZE+HASH_SIZE)
 
 	/* Generate random bytes for the key and IV */
-	_, err = rand.Read(key_iv)
+	_, err = rand.Read(key_iv_hash)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Error generating random bytes for key and IV!: %s", err.Error()))
 	}
 
-	/* Encrypt the key and IV with RSA OAEP */
-	enc_key_iv, err := rsa.EncryptOAEP(sha1.New(), rand.Reader, rsa_pubkey, key_iv, nil)
+	/* Compute SHA1 hash of payload */
+	h := sha1.New()
+	key_iv_hash = append(key_iv_hash, h.Sum(frame)...)
+
+	/* Encrypt the key, IV, and hash with RSA OAEP */
+	enc_key_iv_hash, err := rsa.EncryptOAEP(h, rand.Reader, rsa_pubkey, key_iv_hash, nil)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Error encrypting key + IV with RSA OAEP!: %s", err.Error()))
+		return nil, errors.New(fmt.Sprintf("Error encrypting key + IV + hash with RSA OAEP!: %s", err.Error()))
 	}
 
 	/* Create an AES cipher interface */
-	aes_cipher, err := aes.NewCipher(key_iv[0:KEY_SIZE])
+	aes_cipher, err := aes.NewCipher(key_iv_hash[0:KEY_SIZE])
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Error creating AES cipher instance!: %s", err.Error()))
 	}
 
 	/* Encrypt the frame with AES in CTR mode */
-	ctr := cipher.NewCTR(aes_cipher, key_iv[KEY_SIZE:KEY_SIZE+IV_SIZE])
+	ctr := cipher.NewCTR(aes_cipher, key_iv_hash[KEY_SIZE:KEY_SIZE+IV_SIZE])
 	enc_frame := make([]byte, len(frame))
 	ctr.XORKeyStream(enc_frame, frame)
 
 	/* Combine the encrypted key / IV and the encrypted frame into one slice */
-	total_frame = append(enc_key_iv[:], enc_frame[:]...)
+	total_enc_frame = append(enc_key_iv_hash, enc_frame...)
 
 	/* Compute the CRC32 of the frame */
-	crc_uint32 := crc32.ChecksumIEEE(total_frame)
+	crc_uint32 := crc32.ChecksumIEEE(total_enc_frame)
 	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
 
-	total_frame = append(crc_bytes[:], total_frame[:]...)
+	total_enc_frame = append(crc_bytes, total_enc_frame...)
 
-	return total_frame, nil
+	return total_enc_frame, nil
 }
 
-func decrypt_frame(total_frame []byte, rsa_prikey *rsa.PrivateKey) (frame []byte, inv error, err error) {
+func decrypt_frame(total_enc_frame []byte, rsa_prikey *rsa.PrivateKey) (frame []byte, inv error, err error) {
 	/* Check that the encrypted frame size is valid */
-	if len(total_frame) < CHK_SIZE+OAEP_SIZE {
-		return nil, errors.New("Invalid encrypted frame size!"), nil
+	if len(total_enc_frame) < CHK_SIZE+OAEP_SIZE {
+		return nil, errors.New("Invalid encrypted frame size"), nil
 	}
 
 	/* Verify the checksum */
-	crc_uint32 := crc32.ChecksumIEEE(total_frame[CHK_SIZE:])
+	crc_uint32 := crc32.ChecksumIEEE(total_enc_frame[CHK_SIZE:])
 	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
-	if bytes.Compare(crc_bytes, total_frame[0:CHK_SIZE]) != 0 {
-		return nil, errors.New("Invalid checksum!"), nil
+	if bytes.Compare(crc_bytes, total_enc_frame[0:CHK_SIZE]) != 0 {
+		return nil, errors.New("Invalid checksum"), nil
 	}
 
-	/* Decrypt the key and IV with RSA OAEP */
-	key_iv, err := rsa.DecryptOAEP(sha1.New(), rand.Reader, rsa_prikey, total_frame[CHK_SIZE:CHK_SIZE+OAEP_SIZE], nil)
+	/* Decrypt the key, IV, and hash with RSA OAEP */
+	h := sha1.New()
+	key_iv_hash, err := rsa.DecryptOAEP(h, rand.Reader, rsa_prikey, total_enc_frame[CHK_SIZE:CHK_SIZE+OAEP_SIZE], nil)
 	if err != nil {
-		return nil, errors.New("Decrypting OAEP RSA Payload failed"), nil
+		return nil, errors.New("Decrypting OAEP RSA payload failed"), nil
 	}
 
-	/* Ensure that we decrypted a valid key and IV */
-	if len(key_iv) != KEY_SIZE+IV_SIZE {
-		return nil, errors.New("Invalid OAEP RSA Payload"), nil
+	/* Ensure that we decrypted a valid key, IV, and hash */
+	if len(key_iv_hash) != KEY_SIZE+IV_SIZE+HASH_SIZE {
+		return nil, errors.New("Invalid OAEP RSA decrypted payload"), nil
 	}
 
 	/* Create an AES cipher interface */
-	aes_cipher, err := aes.NewCipher(key_iv[0:KEY_SIZE])
+	aes_cipher, err := aes.NewCipher(key_iv_hash[0:KEY_SIZE])
 	if err != nil {
 		return nil, nil, errors.New(fmt.Sprintf("Error creating AES cipher instance!: %s", err.Error()))
 	}
 
 	/* Decrypt the frame with AES in CTR mode */
-	ctr := cipher.NewCTR(aes_cipher, key_iv[KEY_SIZE:KEY_SIZE+IV_SIZE])
-	frame = make([]byte, len(total_frame)-OAEP_SIZE-CHK_SIZE)
-	ctr.XORKeyStream(frame, total_frame[CHK_SIZE+OAEP_SIZE:])
+	ctr := cipher.NewCTR(aes_cipher, key_iv_hash[KEY_SIZE:KEY_SIZE+IV_SIZE])
+	frame = make([]byte, len(total_enc_frame)-OAEP_SIZE-CHK_SIZE)
+	ctr.XORKeyStream(frame, total_enc_frame[CHK_SIZE+OAEP_SIZE:])
+
+	/* Verify the SHA1 hash for the frame */
+	if bytes.Compare(h.Sum(frame), key_iv_hash[KEY_SIZE+IV_SIZE:KEY_SIZE+IV_SIZE+HASH_SIZE]) != 0 {
+		return nil, errors.New("Invalid payload hash"), nil
+	}
 
 	return frame, nil, nil
 }
@@ -492,7 +505,7 @@ func main() {
 		fmt.Println("Starting plaintext tinytaptunnel...")
 	}
 
-	/* Start two goroutines for forwarding between interfaces */
+	/* Run two goroutines for forwarding between interfaces */
 	go forward_phys_to_tap(phys_conn, tap_conn, peer_addr, local_prikey)
 	forward_tap_to_phys(phys_conn, tap_conn, peer_addr, peer_pubkey)
 }
