@@ -136,9 +136,10 @@ Peer 1
 
 	$ sudo ./tinytaptunnel :9123 peer2_address:9123
 	$ sudo ifconfig tap0 10.1.2.3
+	$ sudo sysctl -w net.ipv4.ip_forward=1
 	$ sudo iptables -t nat -A POSTROUTING -j MASQUERADE -o eth0
 	$ sudo iptables -A FORWARD -i tap0 -o eth0 -j ACCEPT
-	  (these iptables commands are also contained in scripts/l3_route_up.sh
+	  (these iptables commands are also contained in scripts/l3_nat_up.sh
 	   for convenience)
 
 Peer 2
