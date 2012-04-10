@@ -163,7 +163,7 @@ func decap_frame(total_enc_frame []byte) (frame []byte, inv error) {
 
 func encrypt_frame(frame []byte, rsa_pubkey *rsa.PublicKey) (total_enc_frame []byte, err error) {
 	/* Byte slice for the 256-bit key, 128-bit IV */
-	key_iv_hash := make([]byte, KEY_SIZE+IV_SIZE+HASH_SIZE)
+	key_iv_hash := make([]byte, KEY_SIZE+IV_SIZE)
 
 	/* Generate random bytes for the key and IV */
 	_, err = rand.Read(key_iv_hash)
@@ -173,10 +173,11 @@ func encrypt_frame(frame []byte, rsa_pubkey *rsa.PublicKey) (total_enc_frame []b
 
 	/* Compute SHA1 hash of payload */
 	h := sha1.New()
-	key_iv_hash = append(key_iv_hash, h.Sum(frame)...)
+	h.Write(frame)
+	key_iv_hash = append(key_iv_hash, h.Sum(nil)...)
 
 	/* Encrypt the key, IV, and hash with RSA OAEP */
-	enc_key_iv_hash, err := rsa.EncryptOAEP(h, rand.Reader, rsa_pubkey, key_iv_hash, nil)
+	enc_key_iv_hash, err := rsa.EncryptOAEP(sha1.New(), rand.Reader, rsa_pubkey, key_iv_hash, nil)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Error encrypting key + IV + hash with RSA OAEP!: %s", err.Error()))
 	}
@@ -218,8 +219,7 @@ func decrypt_frame(total_enc_frame []byte, rsa_prikey *rsa.PrivateKey) (frame []
 	}
 
 	/* Decrypt the key, IV, and hash with RSA OAEP */
-	h := sha1.New()
-	key_iv_hash, err := rsa.DecryptOAEP(h, rand.Reader, rsa_prikey, total_enc_frame[CHK_SIZE:CHK_SIZE+OAEP_SIZE], nil)
+	key_iv_hash, err := rsa.DecryptOAEP(sha1.New(), rand.Reader, rsa_prikey, total_enc_frame[CHK_SIZE:CHK_SIZE+OAEP_SIZE], nil)
 	if err != nil {
 		return nil, errors.New("Decrypting OAEP RSA payload failed"), nil
 	}
@@ -241,7 +241,9 @@ func decrypt_frame(total_enc_frame []byte, rsa_prikey *rsa.PrivateKey) (frame []
 	ctr.XORKeyStream(frame, total_enc_frame[CHK_SIZE+OAEP_SIZE:])
 
 	/* Verify the SHA1 hash for the frame */
-	if bytes.Compare(h.Sum(frame), key_iv_hash[KEY_SIZE+IV_SIZE:KEY_SIZE+IV_SIZE+HASH_SIZE]) != 0 {
+	h := sha1.New()
+	h.Write(frame)
+	if bytes.Compare(h.Sum(nil), key_iv_hash[KEY_SIZE+IV_SIZE:KEY_SIZE+IV_SIZE+HASH_SIZE]) != 0 {
 		return nil, errors.New("Invalid payload hash"), nil
 	}
 
