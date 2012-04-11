@@ -4,13 +4,13 @@ tinytaptunnel
 About
 -----
 
-tinytaptunnel provides a point-to-point layer 2 tunnel over UDP/IP, accessible
+tinytaptunnel creates a point-to-point layer 2 tunnel over UDP/IP, accessible
 via the generic tap interface at both peers. Any frames written at one peer's
 tap interface are tunneled to the other peer's tap interface, where they can be
 read, and vice-versa. In other words, tinytaptunnel creates a virtual ethernet
 between the tap interfaces of both peers.
 
-Other more capable tunneling software include [OpenSSH](http://openssh.com/),
+Other, more capable, tunneling software include [OpenSSH](http://openssh.com/),
 [OpenVPN](http://openvpn.net/), [n2n](http://www.ntop.org/products/n2n/),
 [tinc](http://www.tinc-vpn.org/), [socat](http://www.dest-unreach.org/socat/)
 and so on.
@@ -19,9 +19,10 @@ tinytaptunnel is lightweight, has purely command-line configuration, and is
 written in Go.
 
 Both plaintext and encrypted modes are supported. Encrypted mode uses RSA (OAEP
-padding) and 256-bit AES (CTR mode), and accepts PKCS#1 DER encoded .pem public
-and private key files. Sample public and private keys for experimentation are
-included in the keys/ folder.
+padding) for key/IV encapsulation and 256-bit AES (CTR mode) for frame
+encryption. PKCS#1 DER encoded .pem public and private key files are accepted.
+Sample public and private keys for experimentation are included in the keys/
+folder.
 
 Since tinytaptunnel operates at layer 2, it can be used for layer 2 bridging
 with standard ethernet bridge tools like brctl, or layer 3 routing / NAT with
@@ -73,7 +74,7 @@ Using tinytaptunnel for a Point-to-Point Static IP Connection
 -------------------------------------------------------------
 
 Configuring the provided tap interface at each peer with static IP addresses on
-the same private subnet will allow a point-to-point tunneled static IP
+the same private subnet will allow for a point-to-point tunneled static IP
 connection.
 
 ##### Example Static IP Configuration
@@ -148,18 +149,18 @@ Peer 2
 	$ sudo ifconfig tap0 10.1.2.4
 	$ sudo route add 192.168.1.0/24 via 10.1.2.3 dev tap0
 
-Now peer 2 should be able to connect to hosts in peer 1's 192.168.1.0/24 subnet
-via the route through peer 1 at 10.1.2.3.
+Now peer 2 should be able to communicate with hosts in peer 1's 192.168.1.0/24
+subnet via the route through peer 1 at 10.1.2.3. Peer 1 will translate /
+masquerade the source address to make the connections on behalf of peer 2.
 
 Limitations of tinytaptunnel
 ----------------------------
 
 In encrypted mode, tinytaptunnel can impose significant delays due to the
-per-frame encryption / decryption. Delays of 4x compared to plaintext mode have
-been observed. Also, due to the size overhead of the RSA encrypted AES key and
-IV, the tap interface provided by tinytaptunnel will have a limited MTU of
-around 1200 on IPv4. This can lead to additional performance loss due to packet
-fragmentation.
+per-frame encryption / decryption. Also, due to the size overhead of the RSA
+encapsulated AES key and IV, the tap interface provided by tinytaptunnel in
+encrypted mode will have a limited MTU of around 1200 on IPv4. This can lead to
+additional performance loss due to packet fragmentation.
 
 Closing Remarks
 ---------------
