@@ -174,7 +174,7 @@ Limitations of tinytaptunnel
 ----------------------------
 
 Due to the MAC and timestamp overhead in encapsulated frames, tinytaptunnel
-presents a tap interface with an MTU of 1432. This limited MTU may lead to some
+presents a tap interface with an MTU of 1418. This limited MTU may lead to some
 performance loss due to packet fragmentation.
 
 Closing Remarks

@@ -40,8 +40,8 @@ const (
     UDP_MTU = 1472
 
     /* Tap MTU =
-     *   UDP_MTU - HMAC_SHA256_SIZE - TIMESTAMP_SIZE = 1432 */
-    TAP_MTU = UDP_MTU - HMAC_SHA256_SIZE - TIMESTAMP_SIZE
+     *   UDP_MTU - Ethernet Header (14) - HMAC_SHA256_SIZE - TIMESTAMP_SIZE = 1418 */
+    TAP_MTU = UDP_MTU - 14 - HMAC_SHA256_SIZE - TIMESTAMP_SIZE
 
     /* Debug level: 0 (off), 1 (report discarded frames), 2 (verbose) */
     DEBUG = 1
@@ -359,7 +359,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 
 func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, key []byte, chan_disc_peer chan net.UDPAddr) {
     /* Raw tap frame received */
-    frame := make([]byte, UDP_MTU)
+    frame := make([]byte, TAP_MTU + 14)
     /* Encapsulated frame and error */
     var enc_frame []byte
     var inv error = nil
