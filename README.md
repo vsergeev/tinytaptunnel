@@ -18,6 +18,8 @@ the current time to prevent spoofed replay attacks.
 
 	tinytaptunnel Encapsulated Frame Format
 
+       |                    IP Header (~20 bytes)                     |
+       |                    UDP Header (8 bytes)                      |
 	   | HMAC-SHA256 (32 bytes) | Nanosecond UNIX Timestamp (8 bytes) |
 	   |               Plaintext Frame (1-1432 bytes)                 |
 	
@@ -82,8 +84,8 @@ Peer 2
 	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
 
 Peer 1 will discover peer 2's IP address and port upon authenticating and
-decoding a valid frame from peer 2. Until discovery, peer 2 cannot tunnel
-frames to peer 1.
+decoding a valid frame from peer 2. Until discovery, peer 1 cannot tunnel
+frames to peer 2.
 
 Using tinytaptunnel for a Point-to-Point Static IP Connection
 -------------------------------------------------------------
@@ -150,7 +152,7 @@ point-to-point connection via tinytaptunnel with static IP addresses on the
 
 Peer 1
 
-	$ sudo ./tinytaptunnel :9123
+	$ sudo ./tinytaptunnel secretkey :9123
 	$ sudo ifconfig tap0 10.1.2.3
 	$ sudo sysctl -w net.ipv4.ip_forward=1
 	$ sudo iptables -t nat -A POSTROUTING -j MASQUERADE -o eth0
@@ -160,7 +162,7 @@ Peer 1
 
 Peer 2
 
-	$ sudo ./tinytaptunnel :9123 peer1_address:9123
+	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
 	$ sudo ifconfig tap0 10.1.2.4
 	$ sudo route add 192.168.1.0/24 via 10.1.2.3 dev tap0
 
@@ -171,7 +173,7 @@ masquerade the source address to make the connections on behalf of peer 2.
 Limitations of tinytaptunnel
 ----------------------------
 
-Due to the MAC and timestamp overhead of encapsulated frames, tinytaptunnel
+Due to the MAC and timestamp overhead in encapsulated frames, tinytaptunnel
 presents a tap interface with an MTU of 1432. This limited MTU may lead to some
 performance loss due to packet fragmentation.
 
