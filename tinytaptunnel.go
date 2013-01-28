@@ -1,253 +1,176 @@
 /*
  * tinytaptunnel v1.0 - Vanya A. Sergeev - vsergeev at gmail
  *
- * Point-to-Point Layer 2 tap interface tunnel over UDP/IP, with optional
- * encryption. See README.md for more information.
+ * Point-to-Point Layer 2 tap interface tunnel over UDP/IP, with
+ * MAC authentication. See README.md for more information.
  */
 
 package main
 
 import (
-	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha1"
-	"crypto/x509"
-	"encoding/hex"
-	"encoding/pem"
-	"errors"
-	"fmt"
-	"hash/crc32"
-	"io/ioutil"
-	"net"
-	"os"
-	"syscall"
-	"unsafe"
+    "fmt"
+    "errors"
+    "os"
+    "net"
+    "log"
+    "time"
+    "bytes"
+    "hash"
+    "crypto/sha256"
+    "crypto/hmac"
+    "crypto/rand"
+    "encoding/binary"
+    "encoding/base64"
+    "encoding/hex"
+    "syscall"
+    "unsafe"
 )
 
 const (
-	/* Key and IV size for 256-bit AES */
-	KEY_SIZE = 32
-	IV_SIZE  = 16
-	/* SHA1 Hash Size */
-	HASH_SIZE = 20
-	/* CRC-32 Size */
-	CHK_SIZE = 4
-	/* RSA OAEP Encrypted Size */
-	OAEP_SIZE = 256
+    /* HMAC-SHA256 MAC Size */
+    HMAC_SHA256_SIZE = sha256.Size
+    /* Timestamp Size */
+    TIMESTAMP_SIZE = 8
 
-	/* UDP Payload MTU */
-	UDP_MTU = 1472
-	/* Tap Encrypted Payload MTU */
-	TAP_ENCRYPTED_MTU = UDP_MTU - OAEP_SIZE - CHK_SIZE - 14
-	/* Tap Plaintext Payload MTU */
-	TAP_PLAINTEXT_MTU = UDP_MTU - CHK_SIZE - 14
+    /* Acceptable timestamp difference threshold (0.5 seconds) */
+    TIMESTAMP_DIFF_THRESHOLD = 500000000
 
-	/* Debug levels 0 (off), 1 (report discarded frames), 2 (verbose) */
-	DEBUG = 1
+    /* UDP Payload MTU =
+     *   Ethernet MTU (1500) - IPv4 Header (20) - UDP Header (8) = 1472 */
+    UDP_MTU = 1472
+
+    /* Tap MTU =
+     *   UDP_MTU - HMAC_SHA256_SIZE - TIMESTAMP_SIZE = 1432 */
+    TAP_MTU = UDP_MTU - HMAC_SHA256_SIZE - TIMESTAMP_SIZE
+
+    /* Debug level: 0 (off), 1 (report discarded frames), 2 (verbose) */
+    DEBUG = 2
 )
 
 /**********************************************************************/
-/*** RSA PEM Key File ***/
+/*** Key file reading and generation ***/
 /**********************************************************************/
 
-func read_pem(filename string) ([]byte, error) {
-	/* Read the ASCII-encoded PEM file */
-	rawpem, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Error reading file!: %s", err.Error()))
-	}
+/* The key file simply contains a base64 encoded random key.
+ * The default random key size is HMAC_SHA256_SIZE. */
 
-	/* Decode into a PEM block */
-	blockpem, _ := pem.Decode(rawpem)
-	if len(blockpem.Bytes) == 0 {
-		return nil, errors.New("Error decoding PEM key!")
-	}
+func keyfile_read(path string) (key []byte, e error) {
+    var key_base64 []byte
 
-	return blockpem.Bytes, nil
+    /* Attempt to open the key file for reading */
+    keyfile, err := os.Open(path)
+    if err != nil {
+        return nil, err
+    }
+    defer keyfile.Close()
+
+    /* Get the key file size */
+    fi, err := keyfile.Stat()
+    if err != nil {
+        return nil, fmt.Errorf("Error getting key file size!: %s\n", err)
+    }
+
+    /* Read the base64 key */
+    key_base64 = make([]byte, fi.Size())
+    n, err := keyfile.Read(key_base64)
+    if err != nil {
+        return nil, fmt.Errorf("Error reading key file!: %s\n", err)
+    }
+
+    /* Decode the base64 key */
+    key = make([]byte, base64.StdEncoding.DecodedLen(len(key_base64)))
+    n, err = base64.StdEncoding.Decode(key, key_base64)
+    if err != nil {
+        return nil, fmt.Errorf("Error decoding base64 key file!: %s\n", err)
+    }
+    /* Truncate the key bytes to the right size */
+    key = key[0:n]
+
+    /* Check key size */
+    if len(key) == 0 {
+        return nil, fmt.Errorf("Error, invalid key in key file!")
+    }
+
+    return key, nil
 }
 
-func read_rsa_pubkey(filename string) (rsa_pubkey *rsa.PublicKey, err error) {
-	/* Read the PEM file */
-	pembytes, err := read_pem(filename)
-	if err != nil {
-		return nil, err
-	}
+func keyfile_generate(path string) (key []byte, e error) {
+    /* Generate a random key */
+    key = make([]byte, HMAC_SHA256_SIZE)
+    n, err := rand.Read(key)
+    if n != len(key) {
+        return nil, fmt.Errorf("Error generating random key of size %d!\n", len(key))
+    }
 
-	/* Parse the Public Key */
-	generic_pubkey, err := x509.ParsePKIXPublicKey(pembytes)
-	if err != nil {
-		return nil, errors.New("Error parsing DER encoded public key!")
-	}
+    /* Base64 encode the key */
+    key_base64 := make([]byte, base64.StdEncoding.EncodedLen(len(key)))
+    base64.StdEncoding.Encode(key_base64, key)
 
-	/* Make sure it's an RSA public key */
-	switch pubkey := generic_pubkey.(type) {
-	case *rsa.PublicKey:
-		rsa_pubkey = pubkey
-	default:
-		return nil, errors.New("Error, invalid public key type!")
-	}
+    /* Open the key file for writing */
+    keyfile, err := os.Create(path)
+    if err != nil {
+        return nil, fmt.Errorf("Error opening key file for writing!: %s\n", err)
+    }
+    defer keyfile.Close()
 
-	return rsa_pubkey, nil
-}
+    /* Write the base64 encoded key */
+    _, err = keyfile.Write(key_base64)
+    if err != nil {
+        return nil, fmt.Errorf("Error writing base64 encoded key to keyfile!: %s\n", err)
+    }
 
-func read_rsa_prikey(filename string) (rsa_prikey *rsa.PrivateKey, err error) {
-	/* Read the PEM file */
-	pembytes, err := read_pem(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	/* Parse the Private Key */
-	rsa_prikey, err = x509.ParsePKCS1PrivateKey(pembytes)
-	if err != nil {
-		return nil, errors.New("Error parsing DER encoded private key!")
-	}
-
-	return rsa_prikey, nil
+    return key, nil
 }
 
 /**********************************************************************/
-/*** Plaintext Frame Encapsulation ***/
+/*** Frame Encapsulation ***/
 /**********************************************************************/
 
-/* Plaintext Frame Format is:
- * | CRC-32 (4 bytes) | Original Frame (original frame len) |
+/* Encapsulated Frame Format
+ * | HMAC-SHA256 (32 bytes) | Timestamp (8 bytes) | Plaintext Frame (frame len) |
  */
 
-func encap_frame(frame []byte) (enc_frame []byte) {
-	/* Compute the CRC32 of the frame */
-	crc_uint32 := crc32.ChecksumIEEE(frame)
-	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
+func encap_frame(frame []byte, hmac_h hash.Hash) (enc_frame []byte, inv error) {
+    /* Encode Big Endian representation of current nanosecond unix time */
+    time_unixnano := time.Now().UnixNano()
+    time_bytes := make([]byte, 8)
+    binary.BigEndian.PutUint64(time_bytes, uint64(time_unixnano))
 
-	/* Prepend CRC to original frame */
-	return append(crc_bytes, frame...)
+    /* Prepend the timestamp to the frame */
+    timestamped_frame := append(time_bytes, frame...)
+
+    /* Compute the HMAC-SHA256 of the timestamped frame */
+    hmac_h.Reset()
+    hmac_h.Write(timestamped_frame)
+
+    /* Prepend the HMAC-SHA256 */
+    enc_frame = append(hmac_h.Sum(nil), timestamped_frame...)
+
+
+    return enc_frame, nil
 }
 
-func decap_frame(total_enc_frame []byte) (frame []byte, inv error) {
-	/* Check that the encapsulated frame size is valid */
-	if len(total_enc_frame) < CHK_SIZE {
-		return nil, errors.New("Invalid encapsulated frame size!")
-	}
+func decap_frame(enc_frame []byte, hmac_h hash.Hash) (frame []byte, inv error) {
+    /* Check that the encapsulated frame size is valid */
+    if len(enc_frame) < (TIMESTAMP_SIZE + HMAC_SHA256_SIZE + 1) {
+        return nil, errors.New("Invalid encapsulated frame size!")
+    }
 
-	/* Verify the checksum */
-	crc_uint32 := crc32.ChecksumIEEE(total_enc_frame[CHK_SIZE:])
-	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
-	if bytes.Compare(crc_bytes, total_enc_frame[0:CHK_SIZE]) != 0 {
-		return nil, errors.New("Invalid checksum")
-	}
+    /* Verify the timestamp */
+    time_unixnano := int64(binary.BigEndian.Uint64(enc_frame[HMAC_SHA256_SIZE:HMAC_SHA256_SIZE+TIMESTAMP_SIZE]))
+    curtime_unixnano := time.Now().UnixNano()
+    if (curtime_unixnano - time_unixnano) > TIMESTAMP_DIFF_THRESHOLD {
+        return nil, errors.New("Timestamp outside of acceptable range!")
+    }
 
-	return total_enc_frame[CHK_SIZE:], nil
-}
+    /* Verify the HMAC-SHA256 */
+    hmac_h.Reset()
+    hmac_h.Write(enc_frame[HMAC_SHA256_SIZE:])
+    if bytes.Compare(hmac_h.Sum(nil), enc_frame[0:HMAC_SHA256_SIZE]) != 0 {
+        return nil, errors.New("Error verifying MAC!")
+    }
 
-/**********************************************************************/
-/*** Encrypted Frame Encapsulation ***/
-/**********************************************************************/
-
-/* Total Encrypted Frame Format is:
- * | CRC-32 (4 bytes) | RSA OAEP Encrypted Key, IV, Payload Hash (256 bytes) |
- * | AES-256 CTR Encrypted Payload (original frame len)                      |
- *
- * Plaintext Key, IV, and Hash are:
- * | Key (32 bytes) | IV (16 bytes) | Payload SHA1 Hash (20 bytes) |
- *
- * 1. 256-bit key and 128-bit IV are pseudo-randomly generated
- * 2. Payload SHA1 Hash is computed
- * 3. Key, IV, Payload SHA1 Hash are encrypted / encapsulated with RSA-OAEP
- * 4. Plaintext is encrypted with AES in CTR mode using key and IV
- * 5. CRC-32 of the Encrypted Key/IV/Hash and Encrypted Frame is calculated
- * 6. Total encrypted frame is assembled as laid out above
- */
-
-func encrypt_frame(frame []byte, rsa_pubkey *rsa.PublicKey) (total_enc_frame []byte, err error) {
-	/* Byte slice for the 256-bit key, 128-bit IV */
-	key_iv_hash := make([]byte, KEY_SIZE+IV_SIZE)
-
-	/* Generate random bytes for the key and IV */
-	_, err = rand.Read(key_iv_hash)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Error generating random bytes for key and IV!: %s", err.Error()))
-	}
-
-	/* Compute SHA1 hash of payload */
-	h := sha1.New()
-	h.Write(frame)
-	key_iv_hash = append(key_iv_hash, h.Sum(nil)...)
-
-	/* Encrypt the key, IV, and hash with RSA OAEP */
-	enc_key_iv_hash, err := rsa.EncryptOAEP(sha1.New(), rand.Reader, rsa_pubkey, key_iv_hash, nil)
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Error encrypting key + IV + hash with RSA OAEP!: %s", err.Error()))
-	}
-
-	/* Create an AES cipher interface */
-	aes_cipher, err := aes.NewCipher(key_iv_hash[0:KEY_SIZE])
-	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Error creating AES cipher instance!: %s", err.Error()))
-	}
-
-	/* Encrypt the frame with AES in CTR mode */
-	ctr := cipher.NewCTR(aes_cipher, key_iv_hash[KEY_SIZE:KEY_SIZE+IV_SIZE])
-	enc_frame := make([]byte, len(frame))
-	ctr.XORKeyStream(enc_frame, frame)
-
-	/* Combine the encrypted key / IV and the encrypted frame into one slice */
-	total_enc_frame = append(enc_key_iv_hash, enc_frame...)
-
-	/* Compute the CRC32 of the frame */
-	crc_uint32 := crc32.ChecksumIEEE(total_enc_frame)
-	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
-
-	total_enc_frame = append(crc_bytes, total_enc_frame...)
-
-	return total_enc_frame, nil
-}
-
-func decrypt_frame(total_enc_frame []byte, rsa_prikey *rsa.PrivateKey) (frame []byte, inv error, err error) {
-	/* Check that the encrypted frame size is valid */
-	if len(total_enc_frame) < CHK_SIZE+OAEP_SIZE {
-		return nil, errors.New("Invalid encrypted frame size"), nil
-	}
-
-	/* Verify the checksum */
-	crc_uint32 := crc32.ChecksumIEEE(total_enc_frame[CHK_SIZE:])
-	crc_bytes := []byte{byte(crc_uint32), byte(crc_uint32 >> 8), byte(crc_uint32 >> 16), byte(crc_uint32 >> 24)}
-	if bytes.Compare(crc_bytes, total_enc_frame[0:CHK_SIZE]) != 0 {
-		return nil, errors.New("Invalid checksum"), nil
-	}
-
-	/* Decrypt the key, IV, and hash with RSA OAEP */
-	key_iv_hash, err := rsa.DecryptOAEP(sha1.New(), rand.Reader, rsa_prikey, total_enc_frame[CHK_SIZE:CHK_SIZE+OAEP_SIZE], nil)
-	if err != nil {
-		return nil, errors.New("Decrypting OAEP RSA payload failed"), nil
-	}
-
-	/* Ensure that we decrypted a valid key, IV, and hash */
-	if len(key_iv_hash) != KEY_SIZE+IV_SIZE+HASH_SIZE {
-		return nil, errors.New("Invalid OAEP RSA decrypted payload"), nil
-	}
-
-	/* Create an AES cipher interface */
-	aes_cipher, err := aes.NewCipher(key_iv_hash[0:KEY_SIZE])
-	if err != nil {
-		return nil, nil, errors.New(fmt.Sprintf("Error creating AES cipher instance!: %s", err.Error()))
-	}
-
-	/* Decrypt the frame with AES in CTR mode */
-	ctr := cipher.NewCTR(aes_cipher, key_iv_hash[KEY_SIZE:KEY_SIZE+IV_SIZE])
-	frame = make([]byte, len(total_enc_frame)-OAEP_SIZE-CHK_SIZE)
-	ctr.XORKeyStream(frame, total_enc_frame[CHK_SIZE+OAEP_SIZE:])
-
-	/* Verify the SHA1 hash for the frame */
-	h := sha1.New()
-	h.Write(frame)
-	if bytes.Compare(h.Sum(nil), key_iv_hash[KEY_SIZE+IV_SIZE:KEY_SIZE+IV_SIZE+HASH_SIZE]) != 0 {
-		return nil, errors.New("Invalid payload hash"), nil
-	}
-
-	return frame, nil, nil
+    return enc_frame[HMAC_SHA256_SIZE:], nil
 }
 
 /**********************************************************************/
@@ -255,260 +178,309 @@ func decrypt_frame(total_enc_frame []byte, rsa_prikey *rsa.PrivateKey) (frame []
 /**********************************************************************/
 
 type TapConn struct {
-	fd     int
-	ifname string
+    fd     int
+    ifname string
 }
 
 func (tap_conn *TapConn) Open(mtu uint) (err error) {
-	/* Open the tap-tun device */
-	tap_conn.fd, err = syscall.Open("/dev/net/tun", syscall.O_RDWR, syscall.S_IRUSR|syscall.S_IWUSR|syscall.S_IRGRP|syscall.S_IROTH)
-	if err != nil {
-		return errors.New(fmt.Sprintf("Error opening device /dev/net/tun!: %s", err.Error()))
-	}
+    /* Open the tap-tun device */
+    tap_conn.fd, err = syscall.Open("/dev/net/tun", syscall.O_RDWR, syscall.S_IRUSR|syscall.S_IWUSR|syscall.S_IRGRP|syscall.S_IROTH)
+    if err != nil {
+        return fmt.Errorf("Error opening device /dev/net/tun!: %s", err)
+    }
 
-	/* Prepare a struct ifreq structure for TUNSETIFF with tap settings */
-	ifr_flags := uint32(syscall.IFF_TAP | syscall.IFF_NO_PI)
-	/* FIXME: Assumes little endian */
-	ifr_struct := make([]byte, 32)
-	ifr_struct[16] = byte(ifr_flags)
-	ifr_struct[17] = byte(ifr_flags >> 8)
-	ifr_struct[18] = byte(ifr_flags >> 16)
-	ifr_struct[19] = byte(ifr_flags >> 24)
-	r0, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_conn.fd), syscall.TUNSETIFF, uintptr(unsafe.Pointer(&ifr_struct[0])))
-	if r0 != 0 {
-		tap_conn.Close()
-		return errors.New(fmt.Sprintf("Error setting tun type!: %s", err.Error()))
-	}
+    /* Prepare a struct ifreq structure for TUNSETIFF with tap settings */
+    ifr_flags := uint16(syscall.IFF_TAP | syscall.IFF_NO_PI)
+    ifr_struct := make([]byte, 32)
+    /* FIXME: Assumes little endian */
+    ifr_struct[16] = byte(ifr_flags)
+    ifr_struct[17] = byte(ifr_flags >> 8)
+    r0, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_conn.fd), syscall.TUNSETIFF, uintptr(unsafe.Pointer(&ifr_struct[0])))
+    if r0 != 0 {
+        tap_conn.Close()
+        return fmt.Errorf("Error setting tun type!: %s", err)
+    }
 
-	/* Extract the assigned interface name into a string */
-	tap_conn.ifname = string(ifr_struct[0:16])
+    /* Extract the assigned interface name into a string */
+    tap_conn.ifname = string(ifr_struct[0:16])
 
-	/* Create a raw socket for our tap interface, so we can set the MTU */
-	tap_sockfd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, syscall.ETH_P_ALL)
-	if err != nil {
-		tap_conn.Close()
-		return errors.New(fmt.Sprintf("Error creating packet socket!: %s", err.Error()))
-	}
+    /* Create a raw socket for our tap interface, so we can set the MTU */
+    tap_sockfd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, syscall.ETH_P_ALL)
+    if err != nil {
+        tap_conn.Close()
+        return fmt.Errorf("Error creating packet socket!: %s", err)
+    }
 
-	/* Bind the raw socket to our tap interface */
-	err = syscall.BindToDevice(tap_sockfd, tap_conn.ifname)
-	if err != nil {
-		syscall.Close(tap_sockfd)
-		tap_conn.Close()
-		return errors.New(fmt.Sprintf("Error binding packet socket to tap interface!: %s", err.Error()))
-	}
+    /* Bind the raw socket to our tap interface */
+    err = syscall.BindToDevice(tap_sockfd, tap_conn.ifname)
+    if err != nil {
+        syscall.Close(tap_sockfd)
+        tap_conn.Close()
+        return fmt.Errorf("Error binding packet socket to tap interface!: %s", err)
+    }
 
-	/* Prepare a ifreq structure for SIOCSIFMTU with MTU setting */
-	ifr_mtu := mtu
-	/* FIXME: Assumes little endian */
-	ifr_struct[16] = byte(ifr_mtu)
-	ifr_struct[17] = byte(ifr_mtu >> 8)
-	ifr_struct[18] = byte(ifr_mtu >> 16)
-	ifr_struct[19] = byte(ifr_mtu >> 24)
-	r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifr_struct[0])))
-	if r0 != 0 {
-		tap_conn.Close()
-		return errors.New(fmt.Sprintf("Error setting MTU!: %s", err.Error()))
-	}
+    /* Prepare a ifreq structure for SIOCSIFMTU with MTU setting */
+    ifr_mtu := mtu
+    /* FIXME: Assumes little endian */
+    ifr_struct[16] = byte(ifr_mtu)
+    ifr_struct[17] = byte(ifr_mtu >> 8)
+    ifr_struct[18] = byte(ifr_mtu >> 16)
+    ifr_struct[19] = byte(ifr_mtu >> 24)
+    r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifr_struct[0])))
+    if r0 != 0 {
+        tap_conn.Close()
+        return fmt.Errorf("Error setting MTU!: %s", err)
+    }
 
-	/* Get the current interface flags in ifr_struct */
-	r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
-	if r0 != 0 {
-		tap_conn.Close()
-		return errors.New(fmt.Sprintf("Error getting tun interface flags!: %s", err.Error()))
-	}
-	/* Update the interface flags to bring the interface up */
-	ifr_flags = uint32(ifr_struct[16]) | uint32(ifr_struct[17]<<8) | uint32(ifr_struct[18]<<16) | uint32(ifr_struct[19]<<24)
-	ifr_flags |= syscall.IFF_UP | syscall.IFF_RUNNING
-	/* FIXME: Assumes little endian */
-	ifr_struct[16] = byte(ifr_flags)
-	ifr_struct[17] = byte(ifr_flags >> 8)
-	ifr_struct[18] = byte(ifr_flags >> 16)
-	ifr_struct[19] = byte(ifr_flags >> 24)
-	r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
-	if r0 != 0 {
-		tap_conn.Close()
-		return errors.New(fmt.Sprintf("Error bringing up tun interface!: %s", err.Error()))
-	}
+    /* Get the current interface flags in ifr_struct */
+    r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
+    if r0 != 0 {
+        tap_conn.Close()
+        return fmt.Errorf("Error getting tun interface flags!: %s", err)
+    }
+    /* Update the interface flags to bring the interface up */
+    ifr_flags = uint16(ifr_struct[16]) | uint16(ifr_struct[17] << 8)
+    ifr_flags |= syscall.IFF_UP | syscall.IFF_RUNNING
+    /* FIXME: Assumes little endian */
+    ifr_struct[16] = byte(ifr_flags)
+    ifr_struct[17] = byte(ifr_flags >> 8)
+    r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
+    if r0 != 0 {
+        tap_conn.Close()
+        return fmt.Errorf("Error bringing up tun interface!: %s", err)
+    }
 
-	/* We don't need the socket file descriptor any more, now that we've
-	 * brought the interface up and set the MTU */
-	syscall.Close(tap_sockfd)
+    /* We don't need the socket file descriptor any more, now that we've
+     * brought the interface up and set the MTU */
+    syscall.Close(tap_sockfd)
 
-	return nil
+    return nil
 }
 
 func (tap_conn *TapConn) Close() {
-	syscall.Close(tap_conn.fd)
+    syscall.Close(tap_conn.fd)
 }
 
 func (tap_conn *TapConn) Read(b []byte) (n int, err error) {
-	return syscall.Read(tap_conn.fd, b)
+    return syscall.Read(tap_conn.fd, b)
 }
 
 func (tap_conn *TapConn) Write(b []byte) (n int, err error) {
-	return syscall.Write(tap_conn.fd, b)
+    return syscall.Write(tap_conn.fd, b)
 }
 
 /**********************************************************************/
 /** Tap / Physical Forwarding ***/
 /**********************************************************************/
 
-func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, local_prikey *rsa.PrivateKey) {
-	packet := make([]byte, UDP_MTU)
-	var dec_frame []byte
-	var inv error = nil
+func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, key []byte, chan_disc_peer chan net.UDPAddr) {
+    /* Raw UDP packet received */
+    packet := make([]byte, UDP_MTU)
+    /* Decapsulated frame and error */
+    var dec_frame []byte
+    var inv error = nil
+    /* Discovered peer */
+    var disc_peer bool = false
+    var disc_peer_addr net.UDPAddr
 
-	for {
-		/* Read an encrypted/encapsulated frame packet from UDP */
-		n, raddr, err := phys_conn.ReadFromUDP(packet)
-		check_error_fatal(err, "Error reading from UDP socket!: %s\n")
+    /* Initialize our HMAC-SHA256 hash context */
+    hmac_h := hmac.New(sha256.New, key)
 
-		/* Ensure it's addressed from our peer */
-		if !raddr.IP.Equal(peer_addr.IP) {
-			continue
-		}
+    /* If we are listening to a particular peer, fill out our discovered peer */
+    if peer_addr != nil {
+        disc_peer = true
+        disc_peer_addr.IP = peer_addr.IP
+        disc_peer_addr.Port = peer_addr.Port
+        log.Printf("Starting phys->tap forwarding with peer %s:%d...\n", disc_peer_addr.IP, disc_peer_addr.Port)
+    } else {
+        log.Printf("Starting phys->tap forwarding with peer discovery...\n")
+    }
 
-		if DEBUG == 2 {
-			fmt.Println("<- phys | Encrypted frame:")
-			fmt.Println(hex.Dump(packet[0:n]))
-		}
+    for {
+        /* Read an encapsulated frame packet from UDP */
+        n, raddr, err := phys_conn.ReadFromUDP(packet)
+        if err != nil {
+            log.Fatalf("Error reading from UDP socket!: %s\n", err)
+        }
 
-		/* Encrypted mode */
-		if local_prikey != nil {
-			/* Decrypt the frame */
-			dec_frame, inv, err = decrypt_frame(packet[0:n], local_prikey)
-			check_error_fatal(err, "Error decrypting frame!: %s\n")
+        /* Ensure it's addressed from our peer, if we've discovered one */
+        if disc_peer {
+            if !raddr.IP.Equal(disc_peer_addr.IP) || raddr.Port != disc_peer_addr.Port {
+                continue
+            }
+        }
 
-		/* Plaintext mode */
-		} else {
-			/* Decapsulate the frame */
-			dec_frame, inv = decap_frame(packet[0:n])
-		}
+        if DEBUG == 2 {
+            log.Println("<- phys | Encapsulated frame from peer:")
+            log.Println("\n" + hex.Dump(packet[0:n]))
+        }
 
-		/* Skip it if it's invalid */
-		if inv != nil {
-			if DEBUG >= 1 {
-				fmt.Printf("<- phys | Frame discarded! Size: %d, Reason: %s\n", n, inv.Error())
-				fmt.Println(hex.Dump(packet[0:n]))
-			}
-			continue
-		}
+        /* Decapsulate the frame */
+        dec_frame, inv = decap_frame(packet[0:n], hmac_h)
 
-		if DEBUG == 2 {
-			fmt.Println("-> tap  | Decrypted frame:")
-			fmt.Println(hex.Dump(dec_frame))
-		}
+        /* Skip it if it's invalid */
+        if inv != nil {
+            if DEBUG >= 1 {
+                log.Printf("<- phys | Frame discarded! Size: %d, Reason: %s\n", n, inv.Error())
+                log.Printf("        | from Peer %s:%d\n", raddr.IP, raddr.Port)
+                log.Println("\n" + hex.Dump(packet[0:n]))
+            }
+            continue
+        }
 
-		/* Forward the decrypted/decapsulate frame to our tap interface */
-		_, err = tap_conn.Write(dec_frame)
-		check_error_fatal(err, "Error writing to tap device!: %s\n")
-	}
+        /* Save the discovered peer, if it's our first valid decoded packet */
+        if !disc_peer {
+            disc_peer_addr.IP = raddr.IP
+            disc_peer_addr.Port = raddr.Port
+            disc_peer = true
+            /* Send the discovered peer info to our forward_tap_to_phys()
+             * goroutine */
+            chan_disc_peer <- disc_peer_addr
+
+            if DEBUG >= 0 {
+                log.Printf("Discovered peer %s:%d!\n", disc_peer_addr.IP, disc_peer_addr.Port)
+            }
+        }
+
+        if DEBUG == 2 {
+            log.Println("-> tap  | Decapsulated frame from peer:")
+            log.Println("\n" + hex.Dump(dec_frame))
+        }
+
+        /* Forward the decapsulated frame to our tap interface */
+        _, err = tap_conn.Write(dec_frame)
+        if err != nil {
+            log.Fatalf("Error writing to tap device!: %s\n", err)
+        }
+    }
 }
 
-func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, peer_pubkey *rsa.PublicKey) {
-	frame := make([]byte, UDP_MTU)
-	var enc_frame []byte
+func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, key []byte, chan_disc_peer chan net.UDPAddr) {
+    /* Raw tap frame received */
+    frame := make([]byte, UDP_MTU)
+    /* Encapsulated frame and error */
+    var enc_frame []byte
+    var inv error = nil
+    /* Discovered peer */
+    var disc_peer_addr net.UDPAddr
 
-	for {
-		/* Read a raw frame from our tap device */
-		n, err := tap_conn.Read(frame)
-		check_error_fatal(err, "Error reading from tap device!: %s\n")
+    /* Initialize our HMAC-SHA256 hash context */
+    hmac_h := hmac.New(sha256.New, key)
 
-		if DEBUG == 2 {
-			fmt.Println("<- tap  | Plaintext frame:")
-			fmt.Println(hex.Dump(frame[0:n]))
-		}
+    /* If no peer was specified, wait for the forward_phys_to_tap() goroutine
+     * to discover a peer */
+    if peer_addr == nil {
+        disc_peer_addr = <-chan_disc_peer
+    } else {
+        /* Otherwise, copy the peer IP and port to our discovered peer */
+        disc_peer_addr.IP = peer_addr.IP
+        disc_peer_addr.Port = peer_addr.Port
+    }
 
-		/* Encrypted mode */
-		if peer_pubkey != nil {
-			/* Encrypt the frame */
-			enc_frame, err = encrypt_frame(frame[0:n], peer_pubkey)
-			check_error_fatal(err, "Error encrypting frame!: %s\n")
+    log.Printf("Starting tap->phys forwarding with peer %s:%d...\n", disc_peer_addr.IP, disc_peer_addr.Port)
 
-		/* Plaintext mode */
-		} else {
-			/* Encapsulate the frame */
-			enc_frame = encap_frame(frame[0:n])
-		}
+    for {
+        /* Read a raw frame from our tap device */
+        n, err := tap_conn.Read(frame)
+        if err != nil {
+            log.Fatalf("Error reading from tap device!: %s\n", err)
+        }
 
-		if DEBUG == 2 {
-			fmt.Println("-> phys | Encrypted frame:")
-			fmt.Println(hex.Dump(enc_frame))
-		}
+        if DEBUG == 2 {
+            log.Println("<- tap  | Plaintext frame to peer:")
+            log.Println("\n" + hex.Dump(frame[0:n]))
+        }
 
-		/* Forward the encrypted/encapsulate frame to our physical
- 		 * interface */
-		_, err = phys_conn.WriteToUDP(enc_frame, peer_addr)
-		check_error_fatal(err, "Error writing to UDP socket!: %s\n")
-	}
+        /* Encapsulate the frame */
+        enc_frame, inv = encap_frame(frame[0:n], hmac_h)
+
+        /* Skip it if it's invalid */
+        if inv != nil {
+            if DEBUG >= 1 {
+                log.Printf("-> phys | Frame discarded! Size: %d, Reason: %s\n", n, inv.Error())
+                log.Println("\n" + hex.Dump(frame[0:n]))
+            }
+            continue
+        }
+
+        if DEBUG == 2 {
+            log.Println("-> phys | Encapsulated frame to peer:")
+            log.Println("\n" + hex.Dump(enc_frame))
+        }
+
+        /* Forward the encapsulate frame to our physical interface */
+        _, err = phys_conn.WriteToUDP(enc_frame, &disc_peer_addr)
+        if err != nil {
+            log.Fatalf("Error writing to UDP socket!: %s\n", err)
+        }
+    }
 }
 
-func check_error_fatal(err error, format string) {
-	if err != nil {
-		fmt.Printf(format, err.Error())
-		os.Exit(1)
-	}
-}
+/**********************************************************************/
+/** Main ***/
+/**********************************************************************/
 
 func main() {
-	var local_prikey *rsa.PrivateKey = nil
-	var peer_pubkey *rsa.PublicKey = nil
-	var tap_mtu uint
-	var encrypted bool = false
+    if len(os.Args) != 3 && len(os.Args) != 4 {
+        log.Println("tinytaptunnel v1.1 Usage\n")
+        log.Printf("  %s <key file> <local address> [peer address]\n\n", os.Args[0])
+        log.Println("If no peer address is provided, tinytaptunnel will discover its peer by the\nfirst valid frame it verifies and decodes.\n")
+        log.Println("If the specified key file does not exist, it will be automatically generated.\n")
+        os.Exit(1)
+    }
 
-	if len(os.Args) != 3 && len(os.Args) != 5 {
-		fmt.Println("tinytaptunnel v1.0 Usage\n")
-		fmt.Println("Plaintext Mode")
-		fmt.Printf("  %s <local address> <peer address>\n", os.Args[0])
-		fmt.Println("\nEncrypted Mode")
-		fmt.Printf("  %s <local address> <peer address> <local prikey> <peer pubkey>\n", os.Args[0])
-		os.Exit(1)
-	}
+    var key []byte
 
-	if len(os.Args) == 5 {
-		/* Encrypted mode */
-		var err error
+    /* Attempt to read the key file */
+    key, err := keyfile_read(os.Args[1])
+    if err != nil && !os.IsNotExist(err) {
+        log.Fatalf("Error reading key file!: %s\n", err)
+    } else if err != nil {
+        /* Otherwise, auto-generate the key file */
+        key, err = keyfile_generate(os.Args[1])
+        if err != nil {
+            log.Fatalf("Error generating key file!: %s\n", err)
+        }
+    }
 
-		/* Load key files for encrypted mode */
-		local_prikey, err = read_rsa_prikey(os.Args[3])
-		check_error_fatal(err, "Error reading private RSA private key!: %s")
-		peer_pubkey, err = read_rsa_pubkey(os.Args[4])
-		check_error_fatal(err, "Error reading peer RSA public key!: %s")
+    /* Parse & resolve local address */
+    local_addr, err := net.ResolveUDPAddr("udp", os.Args[2])
+    if err != nil {
+        log.Fatalf("Error resolving local address!: %s\n", err)
+    }
 
-		encrypted = true
-		tap_mtu = TAP_ENCRYPTED_MTU
-	} else {
-		/* Plaintext mode */
-		tap_mtu = TAP_PLAINTEXT_MTU
-	}
+    /* Parse & resolve peer address, if it was provided */
+    var peer_addr *net.UDPAddr
+    var chan_disc_peer chan net.UDPAddr
+    if len(os.Args) == 4 {
+        peer_addr, err = net.ResolveUDPAddr("udp", os.Args[3])
+        if err != nil {
+            log.Fatalf("Error resolving peer address!: %s\n", err)
+        }
+        chan_disc_peer = nil
+    } else {
+        peer_addr = nil
+        chan_disc_peer = make(chan net.UDPAddr)
+    }
 
-	/* Parse & resolve local address */
-	local_addr, err := net.ResolveUDPAddr("udp", os.Args[1])
-	check_error_fatal(err, "Error resolving local address!: %s\n")
+    /* Create UDP socket */
+    phys_conn, err := net.ListenUDP("udp", local_addr)
+    if err != nil {
+        log.Fatalf("Error creating a UDP socket!: %s\n", err)
+    }
 
-	/* Parse & resolve peer address */
-	peer_addr, err := net.ResolveUDPAddr("udp", os.Args[2])
-	check_error_fatal(err, "Error resolving peer address!: %s\n")
+    /* Create tap interface */
+    tap_conn := new(TapConn)
+    err = tap_conn.Open(TAP_MTU)
+    if err != nil {
+        log.Fatalf("Error opening a tap device!: %s\n", err)
+    }
 
-	/* Create UDP socket */
-	phys_conn, err := net.ListenUDP("udp", local_addr)
-	check_error_fatal(err, "Error creating a UDP socket!: %s\n")
+    log.Printf("Created tunnel at interface %s with MTU %d\n\n", tap_conn.ifname, TAP_MTU)
+    log.Println("Starting tinytaptunnel...")
 
-	/* Create tap interface */
-	tap_conn := new(TapConn)
-	err = tap_conn.Open(tap_mtu)
-	check_error_fatal(err, "Error opening a tap device!: %s\n")
-
-	fmt.Printf("Created tunnel at interface %s with MTU %d\n\n", tap_conn.ifname, tap_mtu)
-	if encrypted {
-		fmt.Println("Starting encrypted tinytaptunnel...")
-	} else {
-		fmt.Println("Starting plaintext tinytaptunnel...")
-	}
-
-	/* Run two goroutines for forwarding between interfaces */
-	go forward_phys_to_tap(phys_conn, tap_conn, peer_addr, local_prikey)
-	forward_tap_to_phys(phys_conn, tap_conn, peer_addr, peer_pubkey)
+    /* Run two goroutines for forwarding between interfaces */
+    go forward_phys_to_tap(phys_conn, tap_conn, peer_addr, key, chan_disc_peer)
+    forward_tap_to_phys(phys_conn, tap_conn, peer_addr, key, chan_disc_peer)
 }
 
