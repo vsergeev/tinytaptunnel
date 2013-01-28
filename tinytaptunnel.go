@@ -172,7 +172,7 @@ func decap_frame(enc_frame []byte, hmac_h hash.Hash) (frame []byte, inv error) {
         return nil, errors.New("Error verifying MAC!")
     }
 
-    return enc_frame[HMAC_SHA256_SIZE:], nil
+    return enc_frame[HMAC_SHA256_SIZE+TIMESTAMP_SIZE:], nil
 }
 
 /**********************************************************************/
