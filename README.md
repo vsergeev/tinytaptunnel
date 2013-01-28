@@ -11,7 +11,7 @@ read, and vice-versa. In other words, tinytaptunnel creates a virtual ethernet
 between the tap interfaces of both peers.
 
 tinytaptunnel authenticates all received frames by verifying the included
-HMAC-SHA256 MAC computed with a preshared key. The MAC covers the encapsulated
+HMAC-SHA256 MAC, computed with a preshared key. The MAC covers the encapsulated
 frame's contents, as well as an included 64-bit UNIX nanosecond timestamp.
 tinytaptunnel will discard frames that contain a timestamp older than 0.5s of
 the current time to prevent spoofed replay attacks.
@@ -20,7 +20,7 @@ the current time to prevent spoofed replay attacks.
 
 	   | HMAC-SHA256 (32 bytes) | Nanosecond UNIX Timestamp (8 bytes) |
 	   |               Plaintext Frame (1-1432 bytes)                 |
-
+	
 
 tinytaptunnel is lightweight, has easy command-line configuration, and is
 written in Go.
