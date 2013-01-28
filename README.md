@@ -32,10 +32,8 @@ bridges or NAT are included in the scripts/ folder.
 
 Other, more capable, tunneling software include [OpenSSH](http://openssh.com/),
 [OpenVPN](http://openvpn.net/), [n2n](http://www.ntop.org/products/n2n/),
-[tinc](http://www.tinc-vpn.org/),
-[stunnel](https://www.stunnel.org/index.html),
+[tinc](http://www.tinc-vpn.org/), [stunnel](https://www.stunnel.org/),
 [socat](http://www.dest-unreach.org/socat/) and so on.
-
 
 Building
 --------

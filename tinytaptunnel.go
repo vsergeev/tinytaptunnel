@@ -44,7 +44,7 @@ const (
     TAP_MTU = UDP_MTU - HMAC_SHA256_SIZE - TIMESTAMP_SIZE
 
     /* Debug level: 0 (off), 1 (report discarded frames), 2 (verbose) */
-    DEBUG = 2
+    DEBUG = 1
 )
 
 /**********************************************************************/
