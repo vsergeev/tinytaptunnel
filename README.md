@@ -47,7 +47,7 @@ Running
 
 Program Usage:
 
-	tinytaptunnel v1.1 Usage
+	tinytaptunnel v1.2 Usage
 	
 	  ./tinytaptunnel <key file> <local address> [peer address]
 	
