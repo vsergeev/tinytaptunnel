@@ -127,7 +127,8 @@ func keyfile_generate(path string) (key []byte, e error) {
 /**********************************************************************/
 
 /* Encapsulated Frame Format
- * | HMAC-SHA256 (32 bytes) | Timestamp (8 bytes) | Plaintext Frame (frame len) |
+ * | HMAC-SHA256 (32 bytes) | Nanosecond Timestamp (8 bytes) |
+ * |           Plaintext Frame (1-1432 bytes)                |
  */
 
 func encap_frame(frame []byte, hmac_h hash.Hash) (enc_frame []byte, inv error) {
