@@ -10,18 +10,25 @@ tap interface are tunneled to the other peer's tap interface, where they can be
 read, and vice-versa. In other words, tinytaptunnel creates a virtual ethernet
 between the tap interfaces of both peers.
 
-	tinytaptunnel Encapsulated Frame Format
-
-	 | HMAC-SHA256 (32 bytes) | Timestamp (8 bytes) | Plaintext Frame (frame len) |
-
 tinytaptunnel authenticates all received frames by verifying the included
 HMAC-SHA256 MAC computed with a preshared key. The MAC covers the encapsulated
 frame's contents, as well as an included 64-bit UNIX nanosecond timestamp.
 tinytaptunnel will discard frames that contain a timestamp older than 0.5s of
 the current time to prevent spoofed replay attacks.
 
+	tinytaptunnel Encapsulated Frame Format
+
+	   | HMAC-SHA256 (32 bytes) | Nanosecond UNIX Timestamp (8 bytes) |
+	   |               Plaintext Frame (1-1432 bytes)                 |
+
+
 tinytaptunnel is lightweight, has easy command-line configuration, and is
 written in Go.
+
+Since tinytaptunnel operates at layer 2, it can be used for layer 2 bridging
+with standard ethernet bridge tools like brctl, or layer 3 routing / NAT with
+standard routing tools like iptables. Convenient scripts to create these
+bridges or NAT are included in the scripts/ folder.
 
 Other, more capable, tunneling software include [OpenSSH](http://openssh.com/),
 [OpenVPN](http://openvpn.net/), [n2n](http://www.ntop.org/products/n2n/),
@@ -29,10 +36,6 @@ Other, more capable, tunneling software include [OpenSSH](http://openssh.com/),
 [stunnel](https://www.stunnel.org/index.html),
 [socat](http://www.dest-unreach.org/socat/) and so on.
 
-Since tinytaptunnel operates at layer 2, it can be used for layer 2 bridging
-with standard ethernet bridge tools like brctl, or layer 3 routing / NAT with
-standard routing tools like iptables. Convenient scripts to create these
-bridges or NAT are included in the scripts/ folder.
 
 Building
 --------
@@ -171,8 +174,8 @@ Limitations of tinytaptunnel
 ----------------------------
 
 Due to the MAC and timestamp overhead of encapsulated frames, tinytaptunnel
-presents an tap interface with a limited MTU of 1432. This lower MTU may lead
-to some performance loss due to packet fragmentation.
+presents a tap interface with an MTU of 1432. This limited MTU may lead to some
+performance loss due to packet fragmentation.
 
 Closing Remarks
 ---------------
