@@ -76,6 +76,8 @@ func keyfile_read(path string) (key []byte, e error) {
     if err != nil {
         return nil, fmt.Errorf("Error reading key file!: %s\n", err)
     }
+    /* Trim whitespace */
+    key_base64 = bytes.TrimSpace(key_base64)
 
     /* Decode the base64 key */
     key = make([]byte, base64.StdEncoding.DecodedLen(len(key_base64)))
