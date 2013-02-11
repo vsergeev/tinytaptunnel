@@ -13,7 +13,7 @@ between the tap interfaces of both peers.
 tinytaptunnel authenticates all received frames by verifying the included
 HMAC-SHA256 MAC, computed with a preshared key. The MAC covers the encapsulated
 frame's contents, as well as an included 64-bit UNIX nanosecond timestamp.
-tinytaptunnel will discard frames that contain a timestamp older than 0.5s of
+tinytaptunnel will discard frames that contain a timestamp older than 1.5s of
 the current time to prevent spoofed replay attacks.
 
 	tinytaptunnel Encapsulated Frame Format

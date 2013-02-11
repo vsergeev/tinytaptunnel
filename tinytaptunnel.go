@@ -32,8 +32,8 @@ const (
     /* Timestamp Size */
     TIMESTAMP_SIZE = 8
 
-    /* Acceptable timestamp difference threshold (0.5 seconds) */
-    TIMESTAMP_DIFF_THRESHOLD = 500000000
+    /* Acceptable timestamp difference threshold (1.5 seconds) */
+    TIMESTAMP_DIFF_THRESHOLD = 1500000000
 
     /* UDP Payload MTU =
      *   Ethernet MTU (1500) - IPv4 Header (20) - UDP Header (8) = 1472 */
@@ -133,7 +133,7 @@ func keyfile_generate(path string) (key []byte, e error) {
  * |             Plaintext Frame (1-1432 bytes)              |
  */
 
-func encap_frame(frame []byte, hmac_h hash.Hash) (enc_frame []byte, inv error) {
+func encap_frame(frame []byte, hmac_h hash.Hash) (enc_frame []byte, invalid error) {
     /* Encode Big Endian representation of current nanosecond unix time */
     time_unixnano := time.Now().UnixNano()
     time_bytes := make([]byte, 8)
@@ -152,14 +152,15 @@ func encap_frame(frame []byte, hmac_h hash.Hash) (enc_frame []byte, inv error) {
     return enc_frame, nil
 }
 
-func decap_frame(enc_frame []byte, hmac_h hash.Hash) (frame []byte, inv error) {
+func decap_frame(enc_frame []byte, hmac_h hash.Hash) (frame []byte, invalid error) {
     /* Check that the encapsulated frame size is valid */
     if len(enc_frame) < (TIMESTAMP_SIZE + HMAC_SHA256_SIZE + 1) {
         return nil, errors.New("Invalid encapsulated frame size!")
     }
 
     /* Verify the timestamp */
-    time_unixnano := int64(binary.BigEndian.Uint64(enc_frame[HMAC_SHA256_SIZE:HMAC_SHA256_SIZE+TIMESTAMP_SIZE]))
+    time_bytes := enc_frame[HMAC_SHA256_SIZE:HMAC_SHA256_SIZE+TIMESTAMP_SIZE]
+    time_unixnano := int64(binary.BigEndian.Uint64(time_bytes))
     curtime_unixnano := time.Now().UnixNano()
     if (curtime_unixnano - time_unixnano) > TIMESTAMP_DIFF_THRESHOLD {
         return nil, errors.New("Timestamp outside of acceptable range!")
@@ -185,22 +186,23 @@ type TapConn struct {
 }
 
 func (tap_conn *TapConn) Open(mtu uint) (err error) {
-    /* Open the tap-tun device */
+    /* Open the tap/tun device */
     tap_conn.fd, err = syscall.Open("/dev/net/tun", syscall.O_RDWR, syscall.S_IRUSR|syscall.S_IWUSR|syscall.S_IRGRP|syscall.S_IROTH)
     if err != nil {
         return fmt.Errorf("Error opening device /dev/net/tun!: %s", err)
     }
 
     /* Prepare a struct ifreq structure for TUNSETIFF with tap settings */
+    /* IFF_TAP: tap device, IFF_NO_PI: no extra packet information */
     ifr_flags := uint16(syscall.IFF_TAP | syscall.IFF_NO_PI)
-    ifr_struct := make([]byte, 32)
     /* FIXME: Assumes little endian */
+    ifr_struct := make([]byte, 32)
     ifr_struct[16] = byte(ifr_flags)
     ifr_struct[17] = byte(ifr_flags >> 8)
     r0, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_conn.fd), syscall.TUNSETIFF, uintptr(unsafe.Pointer(&ifr_struct[0])))
     if r0 != 0 {
         tap_conn.Close()
-        return fmt.Errorf("Error setting tun type!: %s", err)
+        return fmt.Errorf("Error setting tun/tap type!: %s", err)
     }
 
     /* Extract the assigned interface name into a string */
@@ -212,11 +214,13 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
         tap_conn.Close()
         return fmt.Errorf("Error creating packet socket!: %s", err)
     }
+    /* We won't need the socket after we've set the MTU and brought the
+     * interface up */
+    defer syscall.Close(tap_sockfd)
 
     /* Bind the raw socket to our tap interface */
     err = syscall.BindToDevice(tap_sockfd, tap_conn.ifname)
     if err != nil {
-        syscall.Close(tap_sockfd)
         tap_conn.Close()
         return fmt.Errorf("Error binding packet socket to tap interface!: %s", err)
     }
@@ -231,30 +235,26 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
     r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifr_struct[0])))
     if r0 != 0 {
         tap_conn.Close()
-        return fmt.Errorf("Error setting MTU!: %s", err)
+        return fmt.Errorf("Error setting MTU on tap interface!: %s", err)
     }
 
     /* Get the current interface flags in ifr_struct */
     r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
     if r0 != 0 {
         tap_conn.Close()
-        return fmt.Errorf("Error getting tun interface flags!: %s", err)
+        return fmt.Errorf("Error getting tap interface flags!: %s", err)
     }
     /* Update the interface flags to bring the interface up */
+    /* FIXME: Assumes little endian */
     ifr_flags = uint16(ifr_struct[16]) | uint16(ifr_struct[17] << 8)
     ifr_flags |= syscall.IFF_UP | syscall.IFF_RUNNING
-    /* FIXME: Assumes little endian */
     ifr_struct[16] = byte(ifr_flags)
     ifr_struct[17] = byte(ifr_flags >> 8)
     r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
     if r0 != 0 {
         tap_conn.Close()
-        return fmt.Errorf("Error bringing up tun interface!: %s", err)
+        return fmt.Errorf("Error bringing up tap interface!: %s", err)
     }
-
-    /* We don't need the socket file descriptor any more, now that we've
-     * brought the interface up and set the MTU */
-    syscall.Close(tap_sockfd)
 
     return nil
 }
@@ -280,7 +280,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
     packet := make([]byte, UDP_MTU)
     /* Decapsulated frame and error */
     var dec_frame []byte
-    var inv error = nil
+    var invalid error = nil
     /* Discovered peer */
     var disc_peer bool = false
     var disc_peer_addr net.UDPAddr
@@ -288,7 +288,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
     /* Initialize our HMAC-SHA256 hash context */
     hmac_h := hmac.New(sha256.New, key)
 
-    /* If we are listening to a particular peer, fill out our discovered peer */
+    /* If a peer was specified, fill in our discovered peer information */
     if peer_addr != nil {
         disc_peer = true
         disc_peer_addr.IP = peer_addr.IP
@@ -299,13 +299,14 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
     }
 
     for {
-        /* Read an encapsulated frame packet from UDP */
+        /* Receive an encapsulated frame packet through UDP */
         n, raddr, err := phys_conn.ReadFromUDP(packet)
         if err != nil {
             log.Fatalf("Error reading from UDP socket!: %s\n", err)
         }
 
-        /* Ensure it's addressed from our peer, if we've discovered one */
+        /* Ensure it's addressed from our peer, if we've already discovered
+         * one */
         if disc_peer {
             if !raddr.IP.Equal(disc_peer_addr.IP) || raddr.Port != disc_peer_addr.Port {
                 continue
@@ -318,12 +319,12 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
         }
 
         /* Decapsulate the frame */
-        dec_frame, inv = decap_frame(packet[0:n], hmac_h)
+        dec_frame, invalid = decap_frame(packet[0:n], hmac_h)
 
         /* Skip it if it's invalid */
-        if inv != nil {
+        if invalid != nil {
             if DEBUG >= 1 {
-                log.Printf("<- phys | Frame discarded! Size: %d, Reason: %s\n", n, inv.Error())
+                log.Printf("<- phys | Frame discarded! Size: %d, Reason: %s\n", n, invalid.Error())
                 log.Printf("        | from Peer %s:%d\n", raddr.IP, raddr.Port)
                 log.Println("\n" + hex.Dump(packet[0:n]))
             }
@@ -362,21 +363,20 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
     frame := make([]byte, TAP_MTU + 14)
     /* Encapsulated frame and error */
     var enc_frame []byte
-    var inv error = nil
+    var invalid error = nil
     /* Discovered peer */
     var disc_peer_addr net.UDPAddr
 
     /* Initialize our HMAC-SHA256 hash context */
     hmac_h := hmac.New(sha256.New, key)
 
-    /* If no peer was specified, wait for the forward_phys_to_tap() goroutine
-     * to discover a peer */
-    if peer_addr == nil {
-        disc_peer_addr = <-chan_disc_peer
-    } else {
-        /* Otherwise, copy the peer IP and port to our discovered peer */
+    /* If a peer was specified, fill in our discovered peer information */
+    if peer_addr != nil {
         disc_peer_addr.IP = peer_addr.IP
         disc_peer_addr.Port = peer_addr.Port
+    } else {
+        /* Otherwise, wait for the forward_phys_to_tap() goroutine to discover a peer */
+        disc_peer_addr = <-chan_disc_peer
     }
 
     log.Printf("Starting tap->phys forwarding with peer %s:%d...\n", disc_peer_addr.IP, disc_peer_addr.Port)
@@ -394,12 +394,12 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
         }
 
         /* Encapsulate the frame */
-        enc_frame, inv = encap_frame(frame[0:n], hmac_h)
+        enc_frame, invalid = encap_frame(frame[0:n], hmac_h)
 
         /* Skip it if it's invalid */
-        if inv != nil {
+        if invalid != nil {
             if DEBUG >= 1 {
-                log.Printf("-> phys | Frame discarded! Size: %d, Reason: %s\n", n, inv.Error())
+                log.Printf("-> phys | Frame discarded! Size: %d, Reason: %s\n", n, invalid.Error())
                 log.Println("\n" + hex.Dump(frame[0:n]))
             }
             continue
@@ -410,7 +410,7 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
             log.Println("\n" + hex.Dump(enc_frame))
         }
 
-        /* Forward the encapsulate frame to our physical interface */
+        /* Send the encapsulated frame to our peer through UDP */
         _, err = phys_conn.WriteToUDP(enc_frame, &disc_peer_addr)
         if err != nil {
             log.Fatalf("Error writing to UDP socket!: %s\n", err)
@@ -427,7 +427,7 @@ func main() {
         fmt.Println("tinytaptunnel v1.2 Usage\n")
         fmt.Printf("  %s <key file> <local address> [peer address]\n\n", os.Args[0])
         fmt.Println("If no peer address is provided, tinytaptunnel will discover its peer by the\nfirst valid frame it authenticates and decodes.\n")
-        fmt.Println("If the specified key file does not exist, it will be automatically\ngenerated by tinytaptunnel.")
+        fmt.Println("If the specified key file does not exist, it will be automatically\ngenerated with random bytes by tinytaptunnel.")
         os.Exit(1)
     }
 
@@ -435,14 +435,15 @@ func main() {
 
     /* Attempt to read the key file */
     key, err := keyfile_read(os.Args[1])
-    if err != nil && !os.IsNotExist(err) {
-        log.Fatalf("Error reading key file!: %s\n", err)
-    } else if err != nil {
+    /* If the error is file does not exist */
+    if err != nil && os.IsNotExist(err) {
         /* Otherwise, auto-generate the key file */
         key, err = keyfile_generate(os.Args[1])
         if err != nil {
             log.Fatalf("Error generating key file!: %s\n", err)
         }
+    } else if err != nil {
+        log.Fatalf("Error reading key file!: %s\n", err)
     }
 
     /* Parse & resolve local address */
@@ -461,17 +462,19 @@ func main() {
         }
         chan_disc_peer = nil
     } else {
+    /* Otherwise, prepare a channel that the forward_phys_to_tap() goroutine
+     * will forward a discovered peer through */
         peer_addr = nil
         chan_disc_peer = make(chan net.UDPAddr)
     }
 
-    /* Create UDP socket */
+    /* Create a UDP physical connection */
     phys_conn, err := net.ListenUDP("udp", local_addr)
     if err != nil {
         log.Fatalf("Error creating a UDP socket!: %s\n", err)
     }
 
-    /* Create tap interface */
+    /* Create a tap interface */
     tap_conn := new(TapConn)
     err = tap_conn.Open(TAP_MTU)
     if err != nil {
