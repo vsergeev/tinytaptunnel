@@ -1,8 +1,9 @@
 /*
- * tinytaptunnel v1.2 - Vanya A. Sergeev - vsergeev at gmail
+ * tinytaptunnel v1.3 - Vanya A. Sergeev - vsergeev at gmail
  *
  * Point-to-Point Layer 2 tap interface tunnel over UDP/IP, with
  * MAC authentication. See README.md for more information.
+ *
  */
 
 package main
@@ -32,15 +33,16 @@ const (
     /* Timestamp Size */
     TIMESTAMP_SIZE = 8
 
-    /* Acceptable timestamp difference threshold (1.5 seconds) */
-    TIMESTAMP_DIFF_THRESHOLD = 1500000000
+    /* Acceptable timestamp difference threshold in nS (3.0 seconds) */
+    TIMESTAMP_DIFF_THRESHOLD int64 = 3.0*1e9
 
     /* UDP Payload MTU =
      *   Ethernet MTU (1500) - IPv4 Header (20) - UDP Header (8) = 1472 */
     UDP_MTU = 1472
 
-    /* Tap MTU =
-     *   UDP_MTU - Ethernet Header (14) - HMAC_SHA256_SIZE - TIMESTAMP_SIZE = 1418 */
+    /* Tap MTU
+     *   = UDP_MTU - Ethernet Header (14) - HMAC_SHA256_SIZE - TIMESTAMP_SIZE
+     *   = 1418 */
     TAP_MTU = UDP_MTU - 14 - HMAC_SHA256_SIZE - TIMESTAMP_SIZE
 
     /* Debug level: 0 (off), 1 (report discarded frames), 2 (verbose) */
@@ -187,7 +189,7 @@ type TapConn struct {
 
 func (tap_conn *TapConn) Open(mtu uint) (err error) {
     /* Open the tap/tun device */
-    tap_conn.fd, err = syscall.Open("/dev/net/tun", syscall.O_RDWR, syscall.S_IRUSR|syscall.S_IWUSR|syscall.S_IRGRP|syscall.S_IROTH)
+    tap_conn.fd, err = syscall.Open("/dev/net/tun", syscall.O_RDWR, syscall.S_IRUSR | syscall.S_IWUSR | syscall.S_IRGRP | syscall.S_IROTH)
     if err != nil {
         return fmt.Errorf("Error opening device /dev/net/tun!: %s", err)
     }
@@ -272,7 +274,7 @@ func (tap_conn *TapConn) Write(b []byte) (n int, err error) {
 }
 
 /**********************************************************************/
-/** Tap / Physical Forwarding ***/
+/** Phys to Tap Forwarding ***/
 /**********************************************************************/
 
 func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, key []byte, chan_disc_peer chan net.UDPAddr) {
@@ -281,21 +283,23 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
     /* Decapsulated frame and error */
     var dec_frame []byte
     var invalid error = nil
-    /* Discovered peer */
-    var disc_peer bool = false
-    var disc_peer_addr net.UDPAddr
+    /* Peer address */
+    var cur_peer_addr net.UDPAddr
+    /* Peer discovery */
+    var peer_discovery bool
 
     /* Initialize our HMAC-SHA256 hash context */
     hmac_h := hmac.New(sha256.New, key)
 
-    /* If a peer was specified, fill in our discovered peer information */
+    /* If a peer was specified, fill in our peer information */
     if peer_addr != nil {
-        disc_peer = true
-        disc_peer_addr.IP = peer_addr.IP
-        disc_peer_addr.Port = peer_addr.Port
-        log.Printf("Starting phys->tap forwarding with peer %s:%d...\n", disc_peer_addr.IP, disc_peer_addr.Port)
+        cur_peer_addr.IP = peer_addr.IP
+        cur_peer_addr.Port = peer_addr.Port
+        log.Printf("Starting udp->tap forwarding with peer %s:%d...\n", cur_peer_addr.IP, cur_peer_addr.Port)
+        peer_discovery = false
     } else {
-        log.Printf("Starting phys->tap forwarding with peer discovery...\n")
+        log.Printf("Starting udp->tap forwarding with peer discovery...\n")
+        peer_discovery = true
     }
 
     for {
@@ -305,43 +309,40 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
             log.Fatalf("Error reading from UDP socket!: %s\n", err)
         }
 
-        /* Ensure it's addressed from our peer, if we've already discovered
-         * one */
-        if disc_peer {
-            if !raddr.IP.Equal(disc_peer_addr.IP) || raddr.Port != disc_peer_addr.Port {
+        /* If peer discovery is off, ensure the received packge is from our
+         * specified peer */
+        if !peer_discovery && (!raddr.IP.Equal(cur_peer_addr.IP) || raddr.Port != cur_peer_addr.Port) {
                 continue
-            }
         }
 
         if DEBUG == 2 {
-            log.Println("<- phys | Encapsulated frame from peer:")
+            log.Println("<- udp  | Encapsulated frame:")
+            log.Printf( "        | from Peer %s:%d\n", raddr.IP, raddr.Port)
             log.Println("\n" + hex.Dump(packet[0:n]))
         }
 
-        /* Decapsulate the frame */
+        /* Decapsulate the frame, skip it if it's invalid */
         dec_frame, invalid = decap_frame(packet[0:n], hmac_h)
-
-        /* Skip it if it's invalid */
         if invalid != nil {
             if DEBUG >= 1 {
-                log.Printf("<- phys | Frame discarded! Size: %d, Reason: %s\n", n, invalid.Error())
+                log.Printf("<- udp  | Frame discarded! Size: %d, Reason: %s\n", n, invalid.Error())
                 log.Printf("        | from Peer %s:%d\n", raddr.IP, raddr.Port)
                 log.Println("\n" + hex.Dump(packet[0:n]))
             }
             continue
         }
 
-        /* Save the discovered peer, if it's our first valid decoded packet */
-        if !disc_peer {
-            disc_peer_addr.IP = raddr.IP
-            disc_peer_addr.Port = raddr.Port
-            disc_peer = true
-            /* Send the discovered peer info to our forward_tap_to_phys()
-             * goroutine */
-            chan_disc_peer <- disc_peer_addr
+        /* If peer discovery is on and the peer is new, save the discovered
+         * peer */
+        if peer_discovery && (!raddr.IP.Equal(cur_peer_addr.IP) || raddr.Port != cur_peer_addr.Port) {
+            cur_peer_addr.IP = raddr.IP
+            cur_peer_addr.Port = raddr.Port
+            /* Send the new peer info to our forward_tap_to_phys() goroutine
+             * via channel */
+            chan_disc_peer <- cur_peer_addr
 
             if DEBUG >= 0 {
-                log.Printf("Discovered peer %s:%d!\n", disc_peer_addr.IP, disc_peer_addr.Port)
+                log.Printf("Discovered peer %s:%d!\n", cur_peer_addr.IP, cur_peer_addr.Port)
             }
         }
 
@@ -358,30 +359,48 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
     }
 }
 
+/**********************************************************************/
+/** Tap to Phys Forwarding ***/
+/**********************************************************************/
+
 func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *net.UDPAddr, key []byte, chan_disc_peer chan net.UDPAddr) {
     /* Raw tap frame received */
+    //var frame []byte
     frame := make([]byte, TAP_MTU + 14)
     /* Encapsulated frame and error */
     var enc_frame []byte
     var invalid error = nil
-    /* Discovered peer */
-    var disc_peer_addr net.UDPAddr
+    /* Peer address */
+    var cur_peer_addr net.UDPAddr
+    /* Peer discovery */
+    var peer_discovery bool
 
     /* Initialize our HMAC-SHA256 hash context */
     hmac_h := hmac.New(sha256.New, key)
 
-    /* If a peer was specified, fill in our discovered peer information */
+    /* If a peer was specified, fill in our peer information */
     if peer_addr != nil {
-        disc_peer_addr.IP = peer_addr.IP
-        disc_peer_addr.Port = peer_addr.Port
+        cur_peer_addr.IP = peer_addr.IP
+        cur_peer_addr.Port = peer_addr.Port
+        peer_discovery = false
     } else {
+        peer_discovery = true
         /* Otherwise, wait for the forward_phys_to_tap() goroutine to discover a peer */
-        disc_peer_addr = <-chan_disc_peer
+        cur_peer_addr = <-chan_disc_peer
     }
 
-    log.Printf("Starting tap->phys forwarding with peer %s:%d...\n", disc_peer_addr.IP, disc_peer_addr.Port)
+    log.Printf("Starting tap->udp forwarding with peer %s:%d...\n", cur_peer_addr.IP, cur_peer_addr.Port)
 
     for {
+        /* If peer discovery is on, check for any newly discovered peers */
+        if peer_discovery {
+            select {
+                case cur_peer_addr = <-chan_disc_peer:
+                    log.Printf("Starting tap->udp forwarding with peer %s:%d...\n", cur_peer_addr.IP, cur_peer_addr.Port)
+                default:
+            }
+        }
+
         /* Read a raw frame from our tap device */
         n, err := tap_conn.Read(frame)
         if err != nil {
@@ -393,25 +412,23 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
             log.Println("\n" + hex.Dump(frame[0:n]))
         }
 
-        /* Encapsulate the frame */
+        /* Encapsulate the frame, skip it if it's invalid */
         enc_frame, invalid = encap_frame(frame[0:n], hmac_h)
-
-        /* Skip it if it's invalid */
         if invalid != nil {
             if DEBUG >= 1 {
-                log.Printf("-> phys | Frame discarded! Size: %d, Reason: %s\n", n, invalid.Error())
+                log.Printf("-> udp  | Frame discarded! Size: %d, Reason: %s\n", n, invalid.Error())
                 log.Println("\n" + hex.Dump(frame[0:n]))
             }
             continue
         }
 
         if DEBUG == 2 {
-            log.Println("-> phys | Encapsulated frame to peer:")
+            log.Println("-> udp  | Encapsulated frame to peer:")
             log.Println("\n" + hex.Dump(enc_frame))
         }
 
         /* Send the encapsulated frame to our peer through UDP */
-        _, err = phys_conn.WriteToUDP(enc_frame, &disc_peer_addr)
+        _, err = phys_conn.WriteToUDP(enc_frame, &cur_peer_addr)
         if err != nil {
             log.Fatalf("Error writing to UDP socket!: %s\n", err)
         }
@@ -424,10 +441,10 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 
 func main() {
     if len(os.Args) != 3 && len(os.Args) != 4 {
-        fmt.Println("tinytaptunnel v1.2 Usage\n")
-        fmt.Printf("  %s <key file> <local address> [peer address]\n\n", os.Args[0])
-        fmt.Println("If no peer address is provided, tinytaptunnel will discover its peer by the\nfirst valid frame it authenticates and decodes.\n")
-        fmt.Println("If the specified key file does not exist, it will be automatically\ngenerated with random bytes by tinytaptunnel.")
+        fmt.Println("tinytaptunnel v1.3\n")
+        fmt.Printf("Usage: %s <key file> <local address> [peer address]\n\n", os.Args[0])
+        fmt.Println("If no peer address is provided, tinytaptunnel will discover its peer by valid\nframes it authenticates and decodes.\n")
+        fmt.Println("If the specified key file does not exist, it will be automatically generated\nwith secure random bytes.\n")
         os.Exit(1)
     }
 
@@ -437,7 +454,7 @@ func main() {
     key, err := keyfile_read(os.Args[1])
     /* If the error is file does not exist */
     if err != nil && os.IsNotExist(err) {
-        /* Otherwise, auto-generate the key file */
+        /* Auto-generate the key file */
         key, err = keyfile_generate(os.Args[1])
         if err != nil {
             log.Fatalf("Error generating key file!: %s\n", err)
@@ -452,9 +469,10 @@ func main() {
         log.Fatalf("Error resolving local address!: %s\n", err)
     }
 
-    /* Parse & resolve peer address, if it was provided */
+    /* Parse & resolve the peer address, if it was provided */
     var peer_addr *net.UDPAddr
     var chan_disc_peer chan net.UDPAddr
+
     if len(os.Args) == 4 {
         peer_addr, err = net.ResolveUDPAddr("udp", os.Args[3])
         if err != nil {
@@ -463,7 +481,7 @@ func main() {
         chan_disc_peer = nil
     } else {
     /* Otherwise, prepare a channel that the forward_phys_to_tap() goroutine
-     * will forward a discovered peer through */
+     * will forward discovered peers through */
         peer_addr = nil
         chan_disc_peer = make(chan net.UDPAddr)
     }
