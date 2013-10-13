@@ -1,5 +1,5 @@
 #!/bin/sh
 
-sysctl -w net.ipv4.ip_forward=0
-iptables -t filter -F
-iptables -t nat -F
+sudo sysctl -w net.ipv4.ip_forward=0
+sudo iptables -t filter -F
+sudo iptables -t nat -F

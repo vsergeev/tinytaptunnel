@@ -164,7 +164,7 @@ Peer 2
 
 	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
 	$ sudo ifconfig tap0 10.1.2.4
-	$ sudo route add 192.168.1.0/24 via 10.1.2.3 dev tap0
+	$ sudo ip route add 192.168.1.0/24 via 10.1.2.3 dev tap0
 
 Now peer 2 should be able to communicate with hosts in peer 1's 192.168.1.0/24
 subnet via the route through peer 1 at 10.1.2.3. Peer 1 will translate /
