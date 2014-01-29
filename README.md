@@ -51,21 +51,21 @@ The key file contains a preshared base64 encoded key. If the specified key file 
 
 Peer 1
 
-	$ sudo ./tinytaptunnel secretkey :9123 peer2_address:9123
+	$ sudo ./tinytaptunnel preshared.key :9123 peer2_address:9123
 
 Peer 2
 
-	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
+	$ sudo ./tinytaptunnel preshared.key :9123 peer1_address:9123
 
 ##### Example with Peer Discovery
 
 Peer 1
 
-	$ sudo ./tinytaptunnel secretkey :9123
+	$ sudo ./tinytaptunnel preshared.key :9123
 
 Peer 2
 
-	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
+	$ sudo ./tinytaptunnel preshared.key :9123 peer1_address:9123
 
 Peer 1 will discover peer 2's IP address and port upon authenticating and decoding a valid frame from peer 2. Until discovery, peer 1 cannot tunnel frames to peer 2.
 
@@ -78,12 +78,12 @@ Configuring the provided tap interface at each peer with static IP addresses on 
 
 Peer 1
 
-	$ sudo ./tinytaptunnel secretkey :9123 peer2_address:9123
+	$ sudo ./tinytaptunnel preshared.key :9123 peer2_address:9123
 	$ sudo ifconfig tap0 10.1.2.3
 
 Peer 2
 
-	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
+	$ sudo ./tinytaptunnel preshared.key :9123 peer1_address:9123
 	$ sudo ifconfig tap0 10.1.2.4
 
 Peer 1 should now be able to ping peer 2 at 10.1.2.4 through the tunnel, and peer 2 should be able to ping peer 1 at 10.1.2.3.
@@ -97,7 +97,7 @@ Bridging the provided tap interface with a physical interface at one peer will g
 
 Peer 1
 
-	$ sudo ./tinytaptunnel secretkey :9123
+	$ sudo ./tinytaptunnel preshared.key :9123
 	$ sudo brctl addbr vpnbridge
 	$ sudo brctl addif vpnbridge tap0
 	$ sudo brctl addif vpnbridge eth0
@@ -107,7 +107,7 @@ Peer 1
 
 Peer 2
 
-	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
+	$ sudo ./tinytaptunnel preshared.key :9123 peer1_address:9123
 
 Peer 2 should now be able to ARP other hosts on peer 1's local network; request a local address from peer 1's router with DHCP; or in general, participate in peer 1's local IP network after appropriate address configuration.
 
@@ -122,7 +122,7 @@ In this example, peer 1 is on the 192.168.1.0/24 subnet, and both peers have a p
 
 Peer 1
 
-	$ sudo ./tinytaptunnel secretkey :9123
+	$ sudo ./tinytaptunnel preshared.key :9123
 	$ sudo ifconfig tap0 10.1.2.3
 	$ sudo sysctl -w net.ipv4.ip_forward=1
 	$ sudo iptables -t nat -A POSTROUTING -j MASQUERADE -o eth0
@@ -132,7 +132,7 @@ Peer 1
 
 Peer 2
 
-	$ sudo ./tinytaptunnel secretkey :9123 peer1_address:9123
+	$ sudo ./tinytaptunnel preshared.key :9123 peer1_address:9123
 	$ sudo ifconfig tap0 10.1.2.4
 	$ sudo ip route add 192.168.1.0/24 via 10.1.2.3 dev tap0
 
