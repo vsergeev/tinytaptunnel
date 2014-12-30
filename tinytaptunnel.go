@@ -69,14 +69,14 @@ func keyfile_read(path string) (key []byte, e error) {
 	/* Get the key file size */
 	fi, err := keyfile.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("Error getting key file size!: %s\n", err)
+		return nil, fmt.Errorf("Error getting key file size: %s", err)
 	}
 
 	/* Read the base64 key */
 	key_base64 = make([]byte, fi.Size())
 	n, err := keyfile.Read(key_base64)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading key file!: %s\n", err)
+		return nil, fmt.Errorf("Error reading key file: %s", err)
 	}
 	/* Trim whitespace */
 	key_base64 = bytes.TrimSpace(key_base64)
@@ -85,7 +85,7 @@ func keyfile_read(path string) (key []byte, e error) {
 	key = make([]byte, base64.StdEncoding.DecodedLen(len(key_base64)))
 	n, err = base64.StdEncoding.Decode(key, key_base64)
 	if err != nil {
-		return nil, fmt.Errorf("Error decoding base64 key file!: %s\n", err)
+		return nil, fmt.Errorf("Error decoding base64 key file: %s", err)
 	}
 	/* Truncate the key bytes to the right size */
 	key = key[0:n]
@@ -103,7 +103,7 @@ func keyfile_generate(path string) (key []byte, e error) {
 	key = make([]byte, HMAC_SHA256_SIZE)
 	n, err := rand.Read(key)
 	if n != len(key) {
-		return nil, fmt.Errorf("Error generating random key of size %d!\n", len(key))
+		return nil, fmt.Errorf("Error generating random key of size %d: %s", len(key), err)
 	}
 
 	/* Base64 encode the key */
@@ -113,14 +113,14 @@ func keyfile_generate(path string) (key []byte, e error) {
 	/* Open the key file for writing */
 	keyfile, err := os.Create(path)
 	if err != nil {
-		return nil, fmt.Errorf("Error opening key file for writing!: %s\n", err)
+		return nil, fmt.Errorf("Error opening key file for writing: %s", err)
 	}
 	defer keyfile.Close()
 
 	/* Write the base64 encoded key */
 	_, err = keyfile.Write(key_base64)
 	if err != nil {
-		return nil, fmt.Errorf("Error writing base64 encoded key to keyfile!: %s\n", err)
+		return nil, fmt.Errorf("Error writing base64 encoded key to keyfile: %s", err)
 	}
 
 	return key, nil
@@ -191,7 +191,7 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	/* Open the tap/tun device */
 	tap_conn.fd, err = syscall.Open("/dev/net/tun", syscall.O_RDWR, syscall.S_IRUSR|syscall.S_IWUSR|syscall.S_IRGRP|syscall.S_IROTH)
 	if err != nil {
-		return fmt.Errorf("Error opening device /dev/net/tun!: %s", err)
+		return fmt.Errorf("Error opening device /dev/net/tun: %s", err)
 	}
 
 	/* Prepare a struct ifreq structure for TUNSETIFF with tap settings */
@@ -204,7 +204,7 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	r0, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_conn.fd), syscall.TUNSETIFF, uintptr(unsafe.Pointer(&ifr_struct[0])))
 	if r0 != 0 {
 		tap_conn.Close()
-		return fmt.Errorf("Error setting tun/tap type!: %s", err)
+		return fmt.Errorf("Error setting tun/tap type: %s", err)
 	}
 
 	/* Extract the assigned interface name into a string */
@@ -214,7 +214,7 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	tap_sockfd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, syscall.ETH_P_ALL)
 	if err != nil {
 		tap_conn.Close()
-		return fmt.Errorf("Error creating packet socket!: %s", err)
+		return fmt.Errorf("Error creating packet socket: %s", err)
 	}
 	/* We won't need the socket after we've set the MTU and brought the
 	 * interface up */
@@ -224,7 +224,7 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	err = syscall.BindToDevice(tap_sockfd, tap_conn.ifname)
 	if err != nil {
 		tap_conn.Close()
-		return fmt.Errorf("Error binding packet socket to tap interface!: %s", err)
+		return fmt.Errorf("Error binding packet socket to tap interface: %s", err)
 	}
 
 	/* Prepare a ifreq structure for SIOCSIFMTU with MTU setting */
@@ -237,14 +237,14 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFMTU, uintptr(unsafe.Pointer(&ifr_struct[0])))
 	if r0 != 0 {
 		tap_conn.Close()
-		return fmt.Errorf("Error setting MTU on tap interface!: %s", err)
+		return fmt.Errorf("Error setting MTU on tap interface: %s", err)
 	}
 
 	/* Get the current interface flags in ifr_struct */
 	r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
 	if r0 != 0 {
 		tap_conn.Close()
-		return fmt.Errorf("Error getting tap interface flags!: %s", err)
+		return fmt.Errorf("Error getting tap interface flags: %s", err)
 	}
 	/* Update the interface flags to bring the interface up */
 	/* FIXME: Assumes little endian */
@@ -255,7 +255,7 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	r0, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(tap_sockfd), syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifr_struct[0])))
 	if r0 != 0 {
 		tap_conn.Close()
-		return fmt.Errorf("Error bringing up tap interface!: %s", err)
+		return fmt.Errorf("Error bringing up tap interface: %s", err)
 	}
 
 	return nil
@@ -306,7 +306,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 		/* Receive an encapsulated frame packet through UDP */
 		n, raddr, err := phys_conn.ReadFromUDP(packet)
 		if err != nil {
-			log.Fatalf("Error reading from UDP socket!: %s\n", err)
+			log.Fatalf("Error reading from UDP socket: %s\n", err)
 		}
 
 		/* If peer discovery is off, ensure the received packge is from our
@@ -354,7 +354,7 @@ func forward_phys_to_tap(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 		/* Forward the decapsulated frame to our tap interface */
 		_, err = tap_conn.Write(dec_frame)
 		if err != nil {
-			log.Fatalf("Error writing to tap device!: %s\n", err)
+			log.Fatalf("Error writing to tap device: %s\n", err)
 		}
 	}
 }
@@ -404,7 +404,7 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 		/* Read a raw frame from our tap device */
 		n, err := tap_conn.Read(frame)
 		if err != nil {
-			log.Fatalf("Error reading from tap device!: %s\n", err)
+			log.Fatalf("Error reading from tap device: %s\n", err)
 		}
 
 		if DEBUG == 2 {
@@ -430,7 +430,7 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 		/* Send the encapsulated frame to our peer through UDP */
 		_, err = phys_conn.WriteToUDP(enc_frame, &cur_peer_addr)
 		if err != nil {
-			log.Fatalf("Error writing to UDP socket!: %s\n", err)
+			log.Fatalf("Error writing to UDP socket: %s\n", err)
 		}
 	}
 }
@@ -457,16 +457,16 @@ func main() {
 		/* Auto-generate the key file */
 		key, err = keyfile_generate(os.Args[1])
 		if err != nil {
-			log.Fatalf("Error generating key file!: %s\n", err)
+			log.Fatalf("Error generating key file: %s\n", err)
 		}
 	} else if err != nil {
-		log.Fatalf("Error reading key file!: %s\n", err)
+		log.Fatalf("Error reading key file: %s\n", err)
 	}
 
 	/* Parse & resolve local address */
 	local_addr, err := net.ResolveUDPAddr("udp", os.Args[2])
 	if err != nil {
-		log.Fatalf("Error resolving local address!: %s\n", err)
+		log.Fatalf("Error resolving local address: %s\n", err)
 	}
 
 	/* Parse & resolve the peer address, if it was provided */
@@ -476,7 +476,7 @@ func main() {
 	if len(os.Args) == 4 {
 		peer_addr, err = net.ResolveUDPAddr("udp", os.Args[3])
 		if err != nil {
-			log.Fatalf("Error resolving peer address!: %s\n", err)
+			log.Fatalf("Error resolving peer address: %s\n", err)
 		}
 		chan_disc_peer = nil
 	} else {
@@ -489,14 +489,14 @@ func main() {
 	/* Create a UDP physical connection */
 	phys_conn, err := net.ListenUDP("udp", local_addr)
 	if err != nil {
-		log.Fatalf("Error creating a UDP socket!: %s\n", err)
+		log.Fatalf("Error creating a UDP socket: %s\n", err)
 	}
 
 	/* Create a tap interface */
 	tap_conn := new(TapConn)
 	err = tap_conn.Open(TAP_MTU)
 	if err != nil {
-		log.Fatalf("Error opening a tap device!: %s\n", err)
+		log.Fatalf("Error opening a tap device: %s\n", err)
 	}
 
 	log.Printf("Created tunnel at interface %s with MTU %d\n\n", tap_conn.ifname, TAP_MTU)
