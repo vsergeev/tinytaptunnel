@@ -441,10 +441,10 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 
 func main() {
 	if len(os.Args) != 3 && len(os.Args) != 4 {
-		fmt.Println("tinytaptunnel v1.3\n")
+		fmt.Printf("tinytaptunnel v1.3\n\n")
 		fmt.Printf("Usage: %s <key file> <local address> [peer address]\n\n", os.Args[0])
-		fmt.Println("If no peer address is provided, tinytaptunnel will discover its peer by valid\nframes it authenticates and decodes.\n")
-		fmt.Println("If the specified key file does not exist, it will be automatically generated\nwith secure random bytes.\n")
+		fmt.Printf("If no peer address is provided, tinytaptunnel will discover its peer by valid\nframes it authenticates and decodes.\n\n")
+		fmt.Printf("If the specified key file does not exist, it will be automatically generated\nwith secure random bytes.\n\n")
 		os.Exit(1)
 	}
 
