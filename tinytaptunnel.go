@@ -248,7 +248,7 @@ func (tap_conn *TapConn) Open(mtu uint) (err error) {
 	}
 	/* Update the interface flags to bring the interface up */
 	/* FIXME: Assumes little endian */
-	ifr_flags = uint16(ifr_struct[16]) | uint16(ifr_struct[17]<<8)
+	ifr_flags = uint16(ifr_struct[16]) | (uint16(ifr_struct[17]) << 8)
 	ifr_flags |= syscall.IFF_UP | syscall.IFF_RUNNING
 	ifr_struct[16] = byte(ifr_flags)
 	ifr_struct[17] = byte(ifr_flags >> 8)
