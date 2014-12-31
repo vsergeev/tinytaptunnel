@@ -1,5 +1,5 @@
 /*
- * tinytaptunnel v1.3 - Vanya A. Sergeev - vsergeev at gmail
+ * tinytaptunnel v1.4 - Vanya A. Sergeev - vsergeev at gmail
  *
  * Point-to-Point Layer 2 tap interface tunnel over UDP/IP, with
  * MAC authentication. See README.md for more information.
@@ -441,7 +441,7 @@ func forward_tap_to_phys(phys_conn *net.UDPConn, tap_conn *TapConn, peer_addr *n
 
 func main() {
 	if len(os.Args) != 3 && len(os.Args) != 4 {
-		fmt.Printf("tinytaptunnel v1.3\n\n")
+		fmt.Printf("tinytaptunnel v1.4\n\n")
 		fmt.Printf("Usage: %s <key file> <local address> [peer address]\n\n", os.Args[0])
 		fmt.Printf("If no peer address is provided, tinytaptunnel will discover its peer by valid\nframes it authenticates and decodes.\n\n")
 		fmt.Printf("If the specified key file does not exist, it will be automatically generated\nwith secure random bytes.\n\n")

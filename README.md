@@ -1,5 +1,5 @@
-tinytaptunnel
-=============
+tinytaptunnel v1.4
+==================
 
 tinytaptunnel creates a point-to-point layer 2 tunnel over UDP/IP, accessible via the generic [tap](https://www.kernel.org/doc/Documentation/networking/tuntap.txt) interface at both peers. Any frames written to one peer's tap interface are tunneled to the other peer's tap interface, where they can be read, and vice-versa. In other words, tinytaptunnel creates a virtual ethernet between the tap interfaces of two peers.
 
@@ -37,7 +37,7 @@ Usage
 
 ```
 $ tinytaptunnel
-tinytaptunnel v1.3
+tinytaptunnel v1.4
 
 Usage: ./tinytaptunnel <key file> <local address> [peer address]
 
